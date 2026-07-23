@@ -1,0 +1,13 @@
+# Runtime / ML (local installs). On Colab/Lightning do NOT pip install -r this
+# file — keep the studio CUDA torch and use: pip install -e . --no-deps
+python-chess
+numpy
+torch>=2.0
+tqdm
+
+# Native extension build (scikit-build-core + pybind11)
+pybind11>=2.12
+scikit-build-core>=0.10
+# CMake 4.4+ nested try_compile can fail with MSVC/Ninja on Windows; stay on 3.x.
+cmake>=3.26,<4.0
+ninja

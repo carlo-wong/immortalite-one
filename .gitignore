@@ -1,0 +1,84 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+*.egg
+.venv/
+venv/
+.env
+.env.*
+.Python
+pip-wheel-metadata/
+
+# CMake / scikit-build / native extension
+build/
+build-msvc/
+_skbuild/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+*.so
+*.dylib
+*.pyd
+engine/_native*.pyd
+engine/_native*.so
+engine/_native*.exp
+engine/_native*.lib
+*.dll
+# In-source CMake pollution (should use build/)
+/CMakeCache.txt
+/CMakeFiles/
+/build.ninja
+/cmake_install.cmake
+/.ninja_log
+/.ninja_deps
+/_native*.pyd
+*.lib
+*.exp
+*.obj
+*.o
+*.a
+
+# Type checkers / test / IDE
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.idea/
+.vscode/
+.cursor/_nb_dump/
+*.swp
+
+# Local scratch / probe scripts
+tmp_*/
+tmp_*.py
+tmp_*.npz
+tmp_*.pt
+tmp_*.csv
+
+# Training artifacts / checkpoints
+*.pt
+*.npz
+*.log
+*.zip
+checkpoints/
+checkpoints_smoke/
+results/
+syzygy345/
+runs/
+wandb/
+lightning_logs/
+samples_iter_*.npz
+metrics.csv
+metrics_steps.csv
+metrics_gates.csv
+metrics_first_moves.csv
+metrics_first_moves_legacy.csv
+
+# OS
+.DS_Store
+Thumbs.db

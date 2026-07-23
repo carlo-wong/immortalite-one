@@ -1,0 +1,37 @@
+[build-system]
+requires = [
+    "scikit-build-core>=0.10",
+    "pybind11>=2.12",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "immortalite-one"
+version = "0.1.0"
+description = "Immortalite One — hybrid C++/Python AlphaZero-style chess engine"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Immortalite" }]
+dependencies = [
+    "numpy",
+    "python-chess",
+    "torch>=2.0",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[tool.scikit-build]
+minimum-version = "0.10"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["engine"]
+# Install compiled extension into the engine/ package directory.
+wheel.install-dir = "engine"
+cmake.build-type = "Release"
+# Ninja avoids nested try_compile failures with CMake 4.x + VS generators
+# (pybind11 LTO flag probes). Requires ninja on PATH (see requirements.txt).
+cmake.args = ["-G", "Ninja"]
