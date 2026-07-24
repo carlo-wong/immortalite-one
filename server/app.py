@@ -132,7 +132,9 @@ def _load_local_book() -> dict[str, dict]:
         return _local_book
 
     book: dict[str, dict] = {}
-    csv_path = _repo_root / "tmp" / "masters_prefix_free_top64.csv"
+    csv_path = _repo_root / "tmp" / "masters_prefix_free_top128.csv"
+    if not csv_path.is_file():
+        csv_path = _repo_root / "tmp" / "masters_prefix_free_top64.csv"
     if not csv_path.is_file():
         _local_book = book
         return book

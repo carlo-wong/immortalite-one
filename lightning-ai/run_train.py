@@ -41,10 +41,10 @@ TRAIN = {
     "draw_penalty": 1 / 3,
     # Per-ply MCTS root Q value labels (option B); gates still use WDL outcomes.
     "value_target": "root_q",
-    "gate_games": 128,
+    "gate_games": 256,
     "gate_workers": 4,
     "gate_concurrency": 128,
-    # Masters book (64 lines × 2 colors); 0 temperature after forced start.
+    # Masters book (128 lines × 2 colors); 0 temperature after forced start.
     "gate_exploration_moves": 0,
     "gate_openings": "masters",
     "save_every": 10,

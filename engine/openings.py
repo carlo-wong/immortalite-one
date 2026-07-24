@@ -1,4 +1,4 @@
-"""Masters opening book for strength gates (prefix-free top-64)."""
+"""Masters opening book for strength gates (prefix-free top-128)."""
 from __future__ import annotations
 
 import csv
@@ -8,7 +8,7 @@ from pathlib import Path
 import chess
 
 DEFAULT_MASTERS_OPENINGS_PATH = (
-    Path(__file__).resolve().parent / "data" / "masters_prefix_free_top64.tsv"
+    Path(__file__).resolve().parent / "data" / "masters_prefix_free_top128.tsv"
 )
 
 _SAN_MOVE_RE = re.compile(r"[NBRQK]?[a-h]?[1-8]?x?[a-h][1-8](?:=[NBRQ])?|O-O-O|O-O")
@@ -17,8 +17,13 @@ _SAN_MOVE_RE = re.compile(r"[NBRQK]?[a-h]?[1-8]?x?[a-h][1-8](?:=[NBRQ])?|O-O-O|O
 def _parse_pgn_sans(pgn: str) -> list[str]:
     """Extract SAN tokens from a numbered PGN fragment (no result / comments)."""
     clean = re.sub(r"\d+\.+", " ", pgn)
-    clean = re.sub(r"[()#]", " ", clean)
-    return [tok for tok in clean.split() if _SAN_MOVE_RE.fullmatch(tok)]
+    clean = re.sub(r"[()]", " ", clean)
+    toks: list[str] = []
+    for tok in clean.split():
+        tok = tok.rstrip("+#")  # check / mate markers
+        if _SAN_MOVE_RE.fullmatch(tok):
+            toks.append(tok)
+    return toks
 
 
 def pgn_to_uci(pgn: str) -> list[str]:
@@ -59,7 +64,7 @@ def load_opening_book(path: str | Path | None = None) -> list[list[str]]:
 
 
 def load_default_gate_openings() -> list[list[str]]:
-    """64 masters lines for gate_games=128 (each line × both colors)."""
+    """128 masters lines for gate_games=256 (each line × both colors)."""
     return load_opening_book(DEFAULT_MASTERS_OPENINGS_PATH)
 
 

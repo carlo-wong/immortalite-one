@@ -82,8 +82,8 @@ Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T
 | `move_temperature` / `move_temperature_plies` | **4.0** / **10** (sampling only) |
 | `resign` | off |
 | `replay_buffer` / `replay_window` | 200k |
-| `gate_games` / `gate_sims` | 128 / **100** (gates stay 100) |
-| `gate_exploration_moves` / `gate_openings` | 0 / masters (64×2 colors) |
+| `gate_games` / `gate_sims` | **256** / **100** (gates stay 100) |
+| `gate_exploration_moves` / `gate_openings` | 0 / masters (128×2 colors) |
 | `lr` / `lr_min` | **1.5e-4** flat |
 | Training span | auto-stops at iters 260, 280, … (multiples of 20) |
 | `RESET_OPTIMIZER` | `False` |

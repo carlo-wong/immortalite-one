@@ -1144,7 +1144,7 @@ def main() -> None:
         "--gate-openings",
         type=str,
         default="masters",
-        help="gate opening book: 'masters' (default prefix-free top-64), 'none', or TSV path",
+        help="gate opening book: 'masters' (default prefix-free top-128), 'none', or TSV path",
     )
     parser.add_argument("--gate-anchor-iter", type=int, default=60,
                         help="also gate vs this frozen checkpoint iter (0 = off)")

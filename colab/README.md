@@ -56,9 +56,9 @@ Current recipe: iter **261+** — same as `lightning-ai/run_train.py` except wor
 | `draw_penalty` | 1/3 | football 3-1-0 shaping |
 | `resign` | False | off |
 | `lr` / `lr_min` | **1.5e-4** | flat (row 341+) |
-| `gate_games` / `gate_sims` | **128 / 100** | manual gate cell 6 only |
+| `gate_games` / `gate_sims` | **256 / 100** | manual gate cell 6 only |
 | `gate_exploration_moves` | **0** | after masters book (no temperature) |
-| `gate_openings` | **masters** | 64 prefix-free lines × both colors (=128) |
+| `gate_openings` | **masters** | 128 prefix-free lines × both colors (=256) |
 | `save_every` | 10 | numbered snapshots |
 | `resume` | True | loads `latest.pt` automatically |
 

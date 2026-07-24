@@ -79,6 +79,10 @@ metrics_gates.csv
 metrics_first_moves.csv
 metrics_first_moves_legacy.csv
 
+# Local masters book dumps (engine/data/*.tsv is tracked)
+tmp/masters_prefix_free_top64.csv
+tmp/masters_prefix_free_top128.csv
+
 # OS
 .DS_Store
 Thumbs.db
