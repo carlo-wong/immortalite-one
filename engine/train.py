@@ -1101,7 +1101,7 @@ def main() -> None:
     parser.add_argument("--sims", type=int, default=None, help="MCTS sims/move")
     parser.add_argument("--train-steps", type=int, default=None, help="optimizer steps per iteration")
     parser.add_argument("--max-game-moves", type=int, default=None,
-                        help="self-play truncation cap (C2 shaping)")
+                        help="self-play ply safety ceiling (default 10000; not a soft target)")
     parser.add_argument("--draw-penalty", type=float, default=None,
                         help="target for draw outcomes (C2 shaping)")
     parser.add_argument("--value-target", choices=("outcome", "root_q"), default=None,

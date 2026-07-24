@@ -59,7 +59,9 @@ class TrainConfig:
     weight_decay: float = 1e-4
     replay_buffer_size: int = 50_000
     replay_window: int = 50_000
-    max_game_moves: int = 200
+    # Soft safety ceiling only — not a training target. Real games end via
+    # checkmate / Syzygy / 50-move / threefold (same spirit as strength gates).
+    max_game_moves: int = 10_000
     syzygy_path: str | None = None
     tb_max_pieces: int = 5
     # Football 3-1-0 shaping: draw target = -1/3 (draw worth ~one-third of a win).

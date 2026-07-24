@@ -14,7 +14,7 @@ enum class TablebaseOutcome { Unavailable, WinSTM, WinOpp, Draw };
 
 struct GameActorConfig {
   int simulations = 100;
-  int max_game_moves = 200;
+  int max_game_moves = 10000;
   bool claim_draw = true;
   float draw_contempt = 1.0f / 3.0f;
   float draw_penalty = 1.0f / 3.0f;
