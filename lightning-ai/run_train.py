@@ -25,6 +25,8 @@ if _SCRIPT_DIR not in sys.path:
 from paths import ensure_ckpt_dir, resolve_paths, validate_syzygy
 
 # --- edit training settings here ---
+# CUDA with multiple self-play workers defaults to central inference: this
+# training process owns CUDA while workers perform CPU/native search.
 STOP_INTERVAL = 20  # stop after completing iters 160, 180, 200, …
 
 TRAIN = {
@@ -33,7 +35,7 @@ TRAIN = {
     "games": 128,
     "train_steps": 800,
     "concurrency": 128,
-    "selfplay_workers": 4,  # Lightning T4 has 4 vCPUs; Colab bench was 2-vCPU only
+    "selfplay_workers": 4,  # Lightning T4 vCPUs; CUDA central inference auto-enables
     "replay_buffer": 200_000,
     "replay_window": 200_000,
     "draw_penalty": 1 / 3,
@@ -48,8 +50,8 @@ TRAIN = {
     "save_every": 10,
     "resume": True,
     "resign": False,
-    "lr": 2.5e-4,
-    "lr_min": 2.5e-4,
+    "lr": 2.0e-4,
+    "lr_min": 2.0e-4,
     "lr_total_iters": 10_000,
     "lr_warmup_iters": 0,
     "grad_clip": 10.0,
@@ -81,9 +83,7 @@ def main() -> None:
     ensure_ckpt_dir(paths)
     rtbw = validate_syzygy(paths.tb_dir)
 
-    has_cuda = torch.cuda.is_available()
-    device = torch.cuda.get_device_name(0) if has_cuda else "CPU"
-    preset = ["--device", "cuda", "--gpu"] if has_cuda else ["--device", "cpu", "--light"]
+    preset = ["--device", "cuda", "--gpu"]
 
     resume_path = os.path.join(paths.ckpt_dir, "latest.pt")
     resume_args: list[str] = []
@@ -139,7 +139,9 @@ def main() -> None:
     print("repo:       ", paths.repo_dir)
     print("checkpoints:", paths.ckpt_dir)
     print("syzygy:     ", paths.tb_dir, f"({rtbw} .rtbw)")
-    print("CUDA:       ", has_cuda, device)
+    print("device:     ", torch.cuda.get_device_name(0))
+    if TRAIN["selfplay_workers"] > 1:
+        print("self-play:  central inference auto-enabled (one training-process CUDA owner)")
     print("TRAIN:      ", TRAIN)
     print(
         f"training span: iters {start_iter}..{end_iter} "

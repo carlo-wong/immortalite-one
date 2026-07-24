@@ -3,6 +3,7 @@
 #include "board.hpp"
 #include "types.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -46,6 +47,12 @@ struct ExportedNode {
   std::vector<ExportedNode> children;
 };
 
+struct MctsSessionStats {
+  std::uint64_t steps = 0;
+  std::uint64_t simulations_completed = 0;
+  std::uint64_t nodes_expanded = 0;
+};
+
 class MctsSession {
  public:
   // `fen` is the position to search. Optional `moves_from_fen` is applied first
@@ -65,7 +72,20 @@ class MctsSession {
   // Apply NN outputs. logits: (N, 4672), values: (N,).
   void apply_eval(const float* logits, const float* values, int n);
 
+  // Legal policy indices for the single position currently awaiting evaluation.
+  const std::vector<int>& pending_legal_indices() const { return pending_legal_indices_; }
+
+  // Apply logits ordered as pending_legal_indices(), avoiding a full policy transfer.
+  void apply_eval_legal(const float* legal_logits, int legal_count, float value);
+
   const MctsResult& result() const { return result_; }
+  MctsSessionStats stats() const {
+    return {
+        steps_,
+        static_cast<std::uint64_t>(sims_done_),
+        nodes_expanded_,
+    };
+  }
   MctsConfig& config() { return cfg_; }
   const MctsConfig& config() const { return cfg_; }
 
@@ -92,6 +112,11 @@ class MctsSession {
   void select_to_leaf();
   void backup(float value);
   void expand_from_eval(Node& node, const Position& board, const float* logits, float value);
+  void expand_from_legal_eval(Node& node, const Position& board, const float* legal_logits,
+                              float value);
+  void expand_with_priors(Node& node, const std::vector<std::pair<int, Move>>& mapping,
+                          const std::vector<float>& priors);
+  void cache_pending_legal_indices(const Position& board);
   void add_dirichlet_noise(Node& root);
   std::pair<bool, float> terminal_eval(Node& node, const Position& board);
   float value_from_outcome(const Outcome& outcome, const Position& board) const;
@@ -115,8 +140,11 @@ class MctsSession {
   std::unique_ptr<Node> root_;
   std::vector<Node*> path_;
   int path_depth_ = 0;
+  std::vector<int> pending_legal_indices_;
   std::unordered_map<int, float> root_clean_priors_;
   MctsResult result_;
+  std::uint64_t steps_ = 0;
+  std::uint64_t nodes_expanded_ = 0;
 };
 
 }  // namespace immortalite

@@ -17,6 +17,12 @@ import torch
 
 from .config import BeautyConfig, Config, MCTSConfig, NetConfig, TrainConfig
 from .encoding import POLICY_SIZE, board_to_planes
+from .inference import (
+    CentralInferenceBroker,
+    InferenceSettings,
+    RemoteEvaluator,
+    SharedInferenceArena,
+)
 from .mcts import (
     MCTS,
     SearchResult,
@@ -26,19 +32,20 @@ from .mcts import (
     _root_from_native_tree,
 )
 from .network import ChessNet, NetEvaluator
+from .profile import ProfileCounters
 
 _EXPLORATION_MOVES = 20  # sample from the policy for this many plies, then argmax
 GATE_OPENING_PLIES = 8
 
 
 def _prefer_native_selfplay() -> bool:
-    """True when native MctsSession is available and Python fallback is not forced."""
+    """True when native game actors are available and Python fallback is not forced."""
     if os.environ.get("IMMORTALITE_ONE_FORCE_PYTHON", "").strip().lower() in {
         "1", "true", "yes", "on",
     }:
         return False
     native = _load_native()
-    return native is not None and _native_search_ready(native)
+    return native is not None and hasattr(native, "GameActorBatch")
 
 
 def _mcts_cfg_dict(cfg: Config) -> dict[str, Any]:
@@ -428,6 +435,117 @@ def _native_apply_search_result(
     state.session = None
 
 
+def _native_actor_config(cfg: Config, simulations: int, add_noise: bool,
+                         exploration_moves: int) -> dict[str, Any]:
+    return {
+        "simulations": simulations,
+        "max_game_moves": cfg.train.max_game_moves,
+        "claim_draw": cfg.mcts.claim_draw,
+        "draw_contempt": cfg.mcts.draw_contempt,
+        "draw_penalty": cfg.train.draw_penalty,
+        "value_target": cfg.train.value_target,
+        "resign_threshold": cfg.train.resign_threshold,
+        "resign_plies": cfg.train.resign_plies,
+        "resign_min_moves": cfg.train.resign_min_moves,
+        "move_temperature": cfg.train.move_temperature,
+        "move_temperature_plies": cfg.train.move_temperature_plies,
+        "exploration_moves": exploration_moves,
+        "tb_max_pieces": cfg.train.tb_max_pieces,
+        "fast_mate_bonus": cfg.train.fast_mate_bonus,
+        "add_noise": add_noise,
+    }
+
+
+def play_games_batched_native_actors(
+    evaluator: NetEvaluator,
+    cfg: Config,
+    simulations: int,
+    num_games: int,
+    concurrency: int,
+    on_game_finished: Callable[[GameResult], None] | None = None,
+    on_step: Callable[[int], None] | None = None,
+    tablebase: Any | None = None,
+    *,
+    add_noise: bool = True,
+    exploration_moves: int = _EXPLORATION_MOVES,
+    source_iter: int = 0,
+    profile: ProfileCounters | None = None,
+) -> list[GameResult]:
+    """Drive persistent native game actors while retaining Python NN and Syzygy ownership."""
+    if num_games <= 0:
+        return []
+    if concurrency <= 0:
+        raise ValueError("concurrency must be >= 1")
+    native = _load_native()
+    if native is None or not hasattr(native, "GameActorBatch"):
+        raise RuntimeError("native GameActorBatch unavailable")
+    if hasattr(evaluator, "profile"):
+        evaluator.profile = profile
+
+    batch = native.GameActorBatch(
+        num_games,
+        _native_actor_config(cfg, simulations, add_noise, exploration_moves),
+        _mcts_cfg_dict(cfg),
+        int(np.random.randint(0, 2**31 - 1)),
+    )
+    completed: list[GameResult] = []
+    while len(completed) < num_games:
+        requests = batch.tablebase_requests()
+        if requests:
+            ids = np.asarray([request["actor_id"] for request in requests], dtype=np.int32)
+            outcomes = np.zeros(len(requests), dtype=np.int32)  # Unavailable
+            for row, request in enumerate(requests):
+                if tablebase is None:
+                    continue
+                board = chess.Board(request["fen"])
+                try:
+                    wdl = int(tablebase.probe_wdl(board))
+                except (KeyError, chess.syzygy.MissingTableError):
+                    continue
+                outcomes[row] = 1 if wdl == 2 else 2 if wdl == -2 else 3
+            batch.apply_tablebase(ids, outcomes)
+
+        out = np.empty((max(1, concurrency), 20, 8, 8), dtype=np.float32)
+        actor_ids, planes = batch.positions_needing_eval(out)
+        if len(actor_ids):
+            if hasattr(evaluator, "evaluate_legal"):
+                legal_indices, legal_offsets = batch.pending_legal_csr()
+                legal_logits, values = evaluator.evaluate_legal(planes, legal_indices, legal_offsets)
+                batch.apply_eval_legal(actor_ids, legal_logits, legal_offsets, values)
+            else:
+                logits, values = evaluator.evaluate_planes(planes)
+                batch.apply_eval(actor_ids, logits, values)
+            if on_step is not None:
+                on_step(len(actor_ids))
+
+        raw = batch.take_completed()
+        games = raw["games"]
+        for meta in games:
+            start, end = int(meta["sample_start"]), int(meta["sample_end"])
+            samples = [
+                Sample(
+                    np.asarray(raw["planes"][row], dtype=np.float16),
+                    np.asarray(raw["policies"][row], dtype=np.float16),
+                    chess.Color(bool(raw["players"][row])),
+                    float(raw["values"][row]),
+                    source_iter=source_iter,
+                    root_q=float(raw["root_q"][row]),
+                )
+                for row in range(start, end)
+            ]
+            winner_value = int(meta["winner"])
+            game = GameResult(
+                samples=samples,
+                termination=str(meta["termination"]),
+                winner=None if winner_value < 0 else chess.Color(bool(winner_value)),
+                moves=list(meta["moves"]),
+            )
+            completed.append(game)
+            if on_game_finished is not None:
+                on_game_finished(game)
+    return completed
+
+
 def play_games_batched_native(
     evaluator: NetEvaluator,
     cfg: Config,
@@ -441,6 +559,7 @@ def play_games_batched_native(
     add_noise: bool = True,
     exploration_moves: int = _EXPLORATION_MOVES,
     source_iter: int = 0,
+    profile: ProfileCounters | None = None,
 ) -> list[GameResult]:
     """Cross-game batched self-play using native ``MctsSession`` + ``evaluate_planes``."""
     if num_games <= 0:
@@ -448,6 +567,9 @@ def play_games_batched_native(
     if concurrency <= 0:
         raise ValueError("concurrency must be >= 1")
 
+    total_started = time.perf_counter() if profile is not None else 0.0
+    if hasattr(evaluator, "profile"):
+        evaluator.profile = profile
     native = _load_native()
     if native is None or not _native_search_ready(native):
         raise RuntimeError("native MctsSession unavailable")
@@ -482,35 +604,69 @@ def play_games_batched_native(
                 still_active.append(state)
                 continue
 
-            if (
+            terminal_started = time.perf_counter() if profile is not None else 0.0
+            is_terminal = (
                 state.board.is_game_over(claim_draw=cfg.mcts.claim_draw)
                 or state.move_count >= cfg.train.max_game_moves
-            ):
+            )
+            if profile is not None:
+                profile.add_seconds(
+                    "selfplay.terminal_checks", time.perf_counter() - terminal_started
+                )
+                profile.add_count("selfplay.terminal_check_calls")
+            if is_terminal:
+                finalize_started = time.perf_counter() if profile is not None else 0.0
                 game = _finalize_native_game(state, cfg)
+                if profile is not None:
+                    profile.add_seconds(
+                        "selfplay.finalization", time.perf_counter() - finalize_started
+                    )
                 completed.append(game)
                 if on_game_finished is not None:
                     on_game_finished(game)
                 continue
 
+            tablebase_started = time.perf_counter() if profile is not None else 0.0
             tb_termination, tb_winner = _tablebase_adjudication(
                 state.board, tablebase, cfg.train.tb_max_pieces
             )
+            if profile is not None:
+                profile.add_seconds(
+                    "selfplay.tablebase", time.perf_counter() - tablebase_started
+                )
+                profile.add_count("selfplay.tablebase_calls")
             if tb_termination == "tablebase_win":
                 state.tablebase_winner = tb_winner
+                finalize_started = time.perf_counter() if profile is not None else 0.0
                 game = _finalize_native_game(state, cfg)
+                if profile is not None:
+                    profile.add_seconds(
+                        "selfplay.finalization", time.perf_counter() - finalize_started
+                    )
                 completed.append(game)
                 if on_game_finished is not None:
                     on_game_finished(game)
                 continue
             if tb_termination == "tablebase_draw":
                 state.tablebase_draw = True
+                finalize_started = time.perf_counter() if profile is not None else 0.0
                 game = _finalize_native_game(state, cfg)
+                if profile is not None:
+                    profile.add_seconds(
+                        "selfplay.finalization", time.perf_counter() - finalize_started
+                    )
                 completed.append(game)
                 if on_game_finished is not None:
                     on_game_finished(game)
                 continue
 
+            session_started = time.perf_counter() if profile is not None else 0.0
             _native_start_session(native, state, cfg, simulations, add_noise)
+            if profile is not None:
+                profile.add_seconds(
+                    "selfplay.session_create", time.perf_counter() - session_started
+                )
+                profile.add_count("selfplay.sessions")
             still_active.append(state)
 
         active = still_active
@@ -519,20 +675,103 @@ def play_games_batched_native(
 
         needing = [s for s in active if s.session is not None and not s.session.done()]
         if needing:
-            plane_list = [np.asarray(s.session.positions_needing_eval(), dtype=np.float32) for s in needing]
+            positions_started = time.perf_counter() if profile is not None else 0.0
+            plane_list = [
+                np.asarray(s.session.positions_needing_eval(), dtype=np.float32)
+                for s in needing
+            ]
+            if profile is not None:
+                profile.add_seconds(
+                    "selfplay.positions_needing_eval",
+                    time.perf_counter() - positions_started,
+                )
+                profile.add_count("selfplay.positions_needing_eval_calls", len(needing))
             # Each session requests N=0 or N=1; stack non-empty.
             nonempty = [(s, p) for s, p in zip(needing, plane_list) if p.shape[0] > 0]
             if nonempty:
+                assembly_started = time.perf_counter() if profile is not None else 0.0
                 planes = np.concatenate([p for _, p in nonempty], axis=0)
-                logits_batch, values_batch = evaluator.evaluate_planes(planes)
-                offset = 0
-                for state, p in nonempty:
-                    n = int(p.shape[0])
-                    state.session.apply_eval(
-                        logits_batch[offset:offset + n],
-                        values_batch[offset:offset + n],
+                if profile is not None:
+                    batch_size = int(planes.shape[0])
+                    profile.add_seconds(
+                        "selfplay.batch_assembly", time.perf_counter() - assembly_started
                     )
+                    profile.add_count("selfplay.batch_allocations")
+                    profile.add_count("selfplay.evaluated_positions", batch_size)
+                    for threshold in (8, 16, 32):
+                        if batch_size < threshold:
+                            profile.add_count(
+                                f"selfplay.positions_in_batches_lt_{threshold}",
+                                batch_size,
+                            )
+                    if len(active) * 2 < concurrency:
+                        profile.add_count("selfplay.tail_positions", batch_size)
+                    profile.add_bytes("selfplay.assembled_planes", planes.nbytes)
+                    profile.observe("batch_width", batch_size)
+                    profile.observe("active_games", len(active))
+                    profile.observe(
+                        "batch_occupancy_pct",
+                        round(100 * batch_size / max(1, concurrency)),
+                    )
+                evaluate_started = time.perf_counter() if profile is not None else 0.0
+                use_legal = (
+                    hasattr(evaluator, "evaluate_legal")
+                    and all(
+                        hasattr(state.session, "pending_legal_indices")
+                        and hasattr(state.session, "apply_eval_legal")
+                        for state, _ in nonempty
+                    )
+                )
+                legal_indices: np.ndarray | None = None
+                legal_offsets: np.ndarray | None = None
+                if use_legal:
+                    legal_parts = [
+                        np.asarray(state.session.pending_legal_indices(), dtype=np.int32)
+                        for state, _ in nonempty
+                    ]
+                    legal_offsets = np.empty(len(legal_parts) + 1, dtype=np.int32)
+                    legal_offsets[0] = 0
+                    np.cumsum(
+                        np.asarray([part.size for part in legal_parts], dtype=np.int32),
+                        out=legal_offsets[1:],
+                    )
+                    legal_indices = (
+                        np.concatenate(legal_parts)
+                        if legal_parts
+                        else np.empty(0, dtype=np.int32)
+                    )
+                    legal_logits, values_batch = evaluator.evaluate_legal(
+                        planes, legal_indices, legal_offsets
+                    )
+                else:
+                    logits_batch, values_batch = evaluator.evaluate_planes(planes)
+                if profile is not None:
+                    profile.add_seconds(
+                        "selfplay.evaluate_planes", time.perf_counter() - evaluate_started
+                    )
+                offset = 0
+                apply_started = time.perf_counter() if profile is not None else 0.0
+                for row, (state, p) in enumerate(nonempty):
+                    n = int(p.shape[0])
+                    if use_legal:
+                        assert legal_offsets is not None
+                        start = int(legal_offsets[row])
+                        end = int(legal_offsets[row + 1])
+                        state.session.apply_eval_legal(
+                            legal_logits[start:end], float(values_batch[row])
+                        )
+                    else:
+                        state.session.apply_eval(
+                            logits_batch[offset:offset + n], values_batch[offset:offset + n]
+                        )
                     offset += n
+                if profile is not None:
+                    profile.add_seconds(
+                        "selfplay.apply_eval", time.perf_counter() - apply_started
+                    )
+                    profile.add_count("selfplay.apply_eval_calls", len(nonempty))
+                    if use_legal:
+                        profile.add_count("selfplay.apply_eval_legal_calls", len(nonempty))
             if on_step is not None:
                 on_step(len(active))
 
@@ -544,10 +783,31 @@ def play_games_batched_native(
             if not state.session.done():
                 next_active.append(state)
                 continue
+            if profile is not None and hasattr(state.session, "stats"):
+                native_stats = state.session.stats()
+                profile.add_count("native.session_steps", int(native_stats["steps"]))
+                profile.add_count(
+                    "native.simulations_completed",
+                    int(native_stats["simulations_completed"]),
+                )
+                profile.add_count(
+                    "native.nodes_expanded", int(native_stats["nodes_expanded"])
+                )
+            result_started = time.perf_counter() if profile is not None else 0.0
             result = _coerce_native_result(state.session.result(), state.board, cfg)
+            if profile is not None:
+                profile.add_seconds(
+                    "selfplay.result_coercion", time.perf_counter() - result_started
+                )
+            application_started = time.perf_counter() if profile is not None else 0.0
             _native_apply_search_result(
                 state, result, cfg, exploration_moves=exploration_moves
             )
+            if profile is not None:
+                profile.add_seconds(
+                    "selfplay.result_application",
+                    time.perf_counter() - application_started,
+                )
             if state.finished is not None:
                 completed.append(state.finished)
                 if on_game_finished is not None:
@@ -556,6 +816,12 @@ def play_games_batched_native(
                 next_active.append(state)
         active = next_active
 
+    if profile is not None:
+        profile.add_seconds("selfplay.total", time.perf_counter() - total_started)
+        profile.add_count("selfplay.games", len(completed))
+        for game in completed:
+            profile.add_count(f"termination.{game.termination}")
+            profile.observe("game_length", len(game.samples))
     return completed
 
 
@@ -564,6 +830,7 @@ def play_games_batched(evaluator: NetEvaluator, cfg: Config, simulations: int,
                        on_game_finished: Callable[[GameResult], None] | None = None,
                        on_step: Callable[[int], None] | None = None,
                        tablebase: Any | None = None,
+                       profile: ProfileCounters | None = None,
                        ) -> list[GameResult]:
     if num_games <= 0:
         return []
@@ -571,11 +838,12 @@ def play_games_batched(evaluator: NetEvaluator, cfg: Config, simulations: int,
         raise ValueError("concurrency must be >= 1")
 
     if _prefer_native_selfplay():
-        return play_games_batched_native(
+        return play_games_batched_native_actors(
             evaluator, cfg, simulations, num_games, concurrency,
             on_game_finished=on_game_finished,
             on_step=on_step,
             tablebase=tablebase,
+            profile=profile,
         )
 
     active: list[_ActiveGame] = []
@@ -686,22 +954,31 @@ def _split_games(num_games: int, workers: int) -> list[int]:
 _WORKER_STATE: dict[str, Any] = {}
 
 
-def _selfplay_worker_init(net_cfg_dict: dict, device: str, syzygy_path: str | None) -> None:
+def _selfplay_worker_init(
+    net_cfg_dict: dict,
+    device: str,
+    syzygy_path: str | None,
+    central: tuple[SharedInferenceArena, Any, tuple[Any, ...], InferenceSettings] | None = None,
+) -> None:
     """Build + compile the net once per worker process."""
     torch.set_num_threads(1)
-    net = ChessNet(NetConfig(**net_cfg_dict))
-    net.to(device).eval()
-    if device.startswith("cuda") and hasattr(torch, "compile"):
-        net = torch.compile(net, dynamic=True)
     tablebase = None
     if syzygy_path:
         tablebase = chess.syzygy.open_tablebase(syzygy_path)
     _WORKER_STATE.clear()
-    _WORKER_STATE["net"] = net
-    _WORKER_STATE["device"] = device
-    _WORKER_STATE["evaluator"] = NetEvaluator(net, device=device)
     _WORKER_STATE["tablebase"] = tablebase
-    _WORKER_STATE["net_builds"] = 1
+    if central is None:
+        net = ChessNet(NetConfig(**net_cfg_dict))
+        net.to(device).eval()
+        if device.startswith("cuda") and hasattr(torch, "compile"):
+            net = torch.compile(net, dynamic=True)
+        _WORKER_STATE["net"] = net
+        _WORKER_STATE["device"] = device
+        _WORKER_STATE["evaluator"] = NetEvaluator(net, device=device)
+        _WORKER_STATE["net_builds"] = 1
+    else:
+        arena, request_queue, response_queues, settings = central
+        _WORKER_STATE["central"] = (arena, request_queue, response_queues, settings)
 
 
 def _load_worker_weights(weights_path: str) -> None:
@@ -721,7 +998,7 @@ def _selfplay_worker_run(payload: dict) -> tuple[
 ]:
     """Reload weights and play games using the process-local compiled net."""
     n_games = int(payload["n_games"])
-    weights_path = str(payload["weights_path"])
+    weights_path = payload.get("weights_path")
     cfg = _config_from_dict(payload["cfg_dict"])
     sims = int(payload["sims"])
     seed = int(payload["seed"])
@@ -730,8 +1007,23 @@ def _selfplay_worker_run(payload: dict) -> tuple[
     np.random.seed(seed % (2**32 - 1))
     torch.manual_seed(seed)
 
-    _load_worker_weights(weights_path)
-    evaluator = _WORKER_STATE["evaluator"]
+    central = _WORKER_STATE.get("central")
+    if central is None:
+        if weights_path is None:
+            raise ValueError("legacy self-play worker requires weights_path")
+        _load_worker_weights(str(weights_path))
+        evaluator = _WORKER_STATE["evaluator"]
+        concurrency = n_games
+    else:
+        arena, request_queue, response_queues, settings = central
+        worker_id = int(payload["worker_id"])
+        evaluator = RemoteEvaluator(
+            arena, worker_id, request_queue,
+            response_queues[worker_id], settings, int(payload["run_id"]),
+        )
+        # RemoteEvaluator rejects batches larger than the shared slot; keep the
+        # in-flight game count within that capacity.
+        concurrency = min(n_games, int(arena.capacities[worker_id]))
     tablebase = _WORKER_STATE.get("tablebase")
 
     samples: list[Sample] = []
@@ -753,7 +1045,7 @@ def _selfplay_worker_run(payload: dict) -> tuple[
         cfg,
         simulations=sims,
         num_games=n_games,
-        concurrency=n_games,
+        concurrency=concurrency,
         on_game_finished=_on_game,
         tablebase=tablebase,
     )
@@ -821,28 +1113,50 @@ class SelfplayWorkerPool:
         net_cfg: NetConfig,
         device: str,
         syzygy_path: str | None = None,
+        inference: InferenceSettings | None = None,
     ) -> None:
         if workers <= 1:
             raise ValueError("SelfplayWorkerPool requires workers > 1")
         self.workers = workers
+        self.device = device
+        self.inference = inference or InferenceSettings(enabled=False)
+        self.centralized = (
+            self.inference.enabled
+            and device.startswith("cuda")
+            and os.environ.get("IMMORTALITE_ONE_CENTRAL_INFERENCE", "1") != "0"
+        )
         self._closed = False
         self._ctx = mp.get_context("spawn")
         self._manager = self._ctx.Manager()
         self._games_done = self._manager.Value("i", 0)
+        self._run_id = 0
+        self._arena: SharedInferenceArena | None = None
+        self._request_queue: Any | None = None
+        self._response_queues: tuple[Any, ...] = ()
+        central = None
+        if self.centralized:
+            # Each worker has at most its assigned games concurrently.
+            self._arena = SharedInferenceArena.create(
+                [self.inference.max_batch_size] * workers
+            )
+            self._request_queue = self._ctx.Queue(maxsize=max(1, self.inference.queue_depth * workers))
+            self._response_queues = tuple(self._ctx.Queue() for _ in range(workers))
+            central = (self._arena, self._request_queue, self._response_queues, self.inference)
         net_cfg_dict = _net_cfg_dict(net_cfg)
         self._pool = self._ctx.Pool(
             processes=workers,
             initializer=_selfplay_worker_init,
-            initargs=(net_cfg_dict, device, syzygy_path),
+            initargs=(net_cfg_dict, "cpu" if self.centralized else device, syzygy_path, central),
         )
 
     def run(
         self,
         cfg: Config,
-        weights_path: str,
+        weights_path: str | None,
         simulations: int,
         num_games: int,
         on_progress: Callable[[int], None] | None = None,
+        evaluator: NetEvaluator | None = None,
     ) -> tuple[list[Sample], Counter[str], list[int], list[int]]:
         if self._closed:
             raise RuntimeError("SelfplayWorkerPool is closed")
@@ -850,6 +1164,8 @@ class SelfplayWorkerPool:
             return [], Counter(), [], []
 
         game_counts = _split_games(num_games, self.workers)
+        if self.centralized and evaluator is None:
+            raise ValueError("centralized self-play requires the parent NetEvaluator")
         cfg_dict = _config_to_dict(cfg)
         self._games_done.value = 0
         payloads = []
@@ -858,18 +1174,36 @@ class SelfplayWorkerPool:
             payloads.append({
                 "worker_id": worker_id,
                 "n_games": n_worker_games,
-                "weights_path": weights_path,
                 "cfg_dict": cfg_dict,
                 "sims": simulations,
                 "seed": seed,
                 "games_done": self._games_done,
+                "run_id": self._run_id,
             })
+            if not self.centralized:
+                payloads[-1]["weights_path"] = weights_path
+        self._run_id += 1
 
         async_result = self._pool.map_async(_selfplay_worker_run, payloads)
-        while not async_result.ready():
-            if on_progress is not None:
-                on_progress(int(self._games_done.value))
-            time.sleep(0.2)
+        if not self.centralized:
+            while not async_result.ready():
+                if on_progress is not None:
+                    on_progress(int(self._games_done.value))
+                time.sleep(0.2)
+        else:
+            assert self._arena is not None and self._request_queue is not None and evaluator is not None
+            broker = CentralInferenceBroker(
+                evaluator, self._arena, self._request_queue, self._response_queues, self.inference
+            )
+            try:
+                while not async_result.ready():
+                    broker.service_once(0.001)
+                    if on_progress is not None:
+                        on_progress(int(self._games_done.value))
+                broker.drain_until(async_result.ready, poll_s=0.0)
+            except BaseException:
+                broker.abort()
+                raise
         results = async_result.get()
         if on_progress is not None:
             on_progress(num_games)
@@ -884,6 +1218,9 @@ class SelfplayWorkerPool:
             self._pool.join()
         finally:
             self._manager.shutdown()
+            if self._arena is not None:
+                self._arena.close()
+                self._arena.unlink()
 
     def __enter__(self) -> SelfplayWorkerPool:
         return self

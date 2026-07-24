@@ -23,8 +23,9 @@ Gates run every 20 iters vs the checkpoint **20 iters ago**. Edit only the `TRAI
 | **161** | **128** | **800** | **128** | **2** | **200k** | **128 games** (Elo CI) | **2.5e-4 flat** | **100 sims**; resign off; **claim_draw on** in search; **value_target=root_q** (per-ply MCTS Q); Gumbel c_scale 0.1 + root-Q fixes; encoding vectorized |
 | **241** | **128** | **800** | **128** | **2**/4 | **200k** | **128 games** (Elo CI) | **2.5e-4 flat** | same as 161 + **move_temperature=4.0** for first **10** plies (sampling only); log `metrics_first_moves.csv`; **100 sims** |
 | **261** | **128** | **800** | **128** | **2**/4 | **200k** | **128 games** (Elo CI), **gate_sims=100** | **2.5e-4 flat** | same as 241 + **self-play sims 150** (gate stays 100); keep T=4 / 10 plies |
+| **321** | **128** | **800** | **128** | **2**/4 | **200k** | **128 games** (Elo CI), **gate_sims=100** | **2.0e-4 flat** | same as 261; LR step-down 2.5e-4 → 2.0e-4 |
 
-**Current row:** start **261** — T=4 / 10 plies + **self-play sims=150** (`gate_sims` still 100). Resume from `latest.pt`. Do **not** use `--reset-optimizer`.
+**Current row:** start **321** — same as 261 with **LR / lr_min = 2.0e-4 flat**. Resume from `latest.pt`. Do **not** use `--reset-optimizer`.
 
 Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net only with a new `--checkpoint-dir`.
 

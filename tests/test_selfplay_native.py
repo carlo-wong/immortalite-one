@@ -9,6 +9,7 @@ import pytest
 from engine.config import Config
 from engine.encoding import POLICY_SIZE
 from engine.network import ChessNet, NetEvaluator
+from engine.profile import ProfileCounters
 from engine.selfplay import (
     _prefer_native_selfplay,
     play_game_gen,
@@ -45,6 +46,22 @@ class _DeterministicEvaluator:
         n = int(planes.shape[0])
         values = np.full(n, 0.15, dtype=np.float32)
         return np.repeat(self.logits[None, :], n, axis=0), values
+
+    def evaluate_legal(
+        self,
+        planes: np.ndarray,
+        legal_indices: np.ndarray,
+        legal_offsets: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        n = int(planes.shape[0])
+        indices = np.asarray(legal_indices)
+        offsets = np.asarray(legal_offsets)
+        gathered = np.empty(len(indices), dtype=np.float32)
+        for row in range(n):
+            start, end = int(offsets[row]), int(offsets[row + 1])
+            gathered[start:end] = self.logits[indices[start:end]]
+        return gathered, np.full(n, 0.15, dtype=np.float32)
+
 
 
 def _play_python_deterministic(evaluator, cfg: Config, simulations: int):
@@ -93,3 +110,52 @@ def test_native_selfplay_matches_python_zero_semantics(monkeypatch) -> None:
         np.testing.assert_allclose(actual.policy, expected.policy, rtol=0, atol=1e-3)
         assert actual.root_q == pytest.approx(expected.root_q, abs=1e-6)
         assert actual.value == pytest.approx(expected.value, abs=1e-6)
+
+
+def test_opt_in_profile_preserves_native_selfplay_semantics() -> None:
+    cfg = Config()
+    cfg.train.max_game_moves = 4
+    cfg.train.value_target = "root_q"
+    cfg.mcts.dirichlet_epsilon = 0.0
+    evaluator = _DeterministicEvaluator()
+
+    baseline = play_games_batched_native(
+        evaluator,
+        cfg,
+        simulations=8,
+        num_games=1,
+        concurrency=1,
+        add_noise=False,
+        exploration_moves=0,
+    )[0]
+    profile = ProfileCounters()
+    profiled = play_games_batched_native(
+        evaluator,
+        cfg,
+        simulations=8,
+        num_games=1,
+        concurrency=1,
+        add_noise=False,
+        exploration_moves=0,
+        profile=profile,
+    )[0]
+
+    assert profiled.moves == baseline.moves
+    assert profiled.termination == baseline.termination
+    assert profiled.winner == baseline.winner
+    assert len(profiled.samples) == len(baseline.samples)
+    for actual, expected in zip(profiled.samples, baseline.samples):
+        np.testing.assert_array_equal(actual.planes, expected.planes)
+        np.testing.assert_array_equal(actual.policy, expected.policy)
+        assert actual.value == expected.value
+        assert actual.root_q == expected.root_q
+
+    snapshot = profile.snapshot()
+    assert snapshot["counts"]["selfplay.games"] == 1
+    assert (
+        snapshot["counts"]["native.session_steps"]
+        == snapshot["counts"]["selfplay.evaluated_positions"]
+    )
+    assert snapshot["counts"]["native.simulations_completed"] == 8 * len(profiled.moves)
+    assert snapshot["counts"]["native.nodes_expanded"] > 0
+    assert sum(snapshot["histograms"]["batch_width"].values()) > 0

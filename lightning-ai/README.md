@@ -50,7 +50,7 @@ sudo apt-get install -y build-essential ninja-build python3-dev
 pip install -q "cmake>=3.26,<4.0" ninja pybind11 scikit-build-core
 pip install -q python-chess numpy tqdm
 pip install -q -e . --no-deps
-python -c "import torch; from engine import _native; assert torch.cuda.is_available(); print(torch.__version__, torch.version.cuda, _native.version())"
+python -c "import torch; from engine import _native; print(torch.__version__, torch.version.cuda, _native.version())"
 ```
 
 `--no-deps` uses **scikit-build-core** + **pybind11** already installed above to compile `cpp/` into `engine._native` without touching torch.
@@ -84,7 +84,7 @@ Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T
 | `replay_buffer` / `replay_window` | 200k |
 | `gate_games` / `gate_sims` | 128 / **100** (gates stay 100) |
 | `gate_exploration_moves` / `gate_openings` | 0 / masters (64×2 colors) |
-| `lr` / `lr_min` | 2.5e-4 flat |
+| `lr` / `lr_min` | 2.0e-4 flat |
 | Training span | auto-stops at iters 260, 280, … (multiples of 20) |
 | `RESET_OPTIMIZER` | `False` |
 
@@ -119,7 +119,6 @@ Legacy Zero checkpoints lack `value_target` metadata: resume with an explicit `-
 | Problem | Fix |
 |---------|-----|
 | `engine._native` import error | Re-run Step 1 (`pip install -e . --no-deps` + pinned cmake) |
-| No CUDA | Select GPU machine, re-run |
 | Syzygy incomplete | All 145 `.rtbw` in `syzygy345/` sibling folder |
 | `results/` not found | Sibling of repo, not inside it |
 | Slow self-play | Keep `concurrency` = `games`; `selfplay_workers=4` on Lightning (4 vCPUs). Colab bench only tested 2 |

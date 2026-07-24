@@ -10,9 +10,10 @@ Step-by-step guide for the free Colab GPU workflow. Open `colab/train.ipynb` and
 
 - A **Google account** (Colab + Drive).
 - Code on GitHub: `github.com/carlo-wong/immortalite-one` — `git push` after local changes so Colab can `git pull`.
-- **Native extension:** cell 2 installs pinned `cmake>=3.26,<4.0` and runs `pip install -e . --no-deps` so Colab’s CUDA torch is not replaced. Training will not run without `engine._native`. See [docs/BUILD.md](../docs/BUILD.md) for wheels / troubleshooting.
+- **Drive first:** cell 2 mounts Drive so you can verify access before the slow install.
+- **Native extension:** cell 3 installs pinned `cmake>=3.26,<4.0` and runs `pip install -e . --no-deps` so Colab’s CUDA torch is not replaced. Training will not run without `engine._native`. See [docs/BUILD.md](../docs/BUILD.md) for wheels / troubleshooting.
 - **Existing training data:** during migration, the notebook reads and writes `MyDrive/immortalite_zero_checkpoints` directly.
-- **Syzygy:** cell 5 copies `syzygy345/` from Drive if present, or downloads once into your checkpoint folder.
+- **Syzygy:** cell 4 copies `syzygy345/` from Drive if present, or downloads once into your checkpoint folder.
 
 ---
 
@@ -31,15 +32,14 @@ Or: [colab.research.google.com](https://colab.research.google.com) → **File �
 | Cell | What it does |
 |------|--------------|
 | 1 | Clone repo + `git pull` |
-| 2 | Pin cmake + **build native extension** (`pip install -e . --no-deps`) |
-| 3 | Mount Drive → existing `MyDrive/immortalite_zero_checkpoints` |
-| 4 | Confirm GPU, set `--gpu` preset |
-| 5 | Syzygy tablebases (Drive cache or download) |
-| 6 | **Train** — edit `TRAIN` dict only; auto-stops at iters 160, 180, … |
-| 7 | Optional **manual gate** (SPRT, 128 games / 100 sims) |
-| 8 | Plot `metrics.csv` + gate results |
+| 2 | Mount Drive → existing `MyDrive/immortalite_zero_checkpoints` (verify, then AFK) |
+| 3 | Pin cmake + **build native extension** (`pip install -e . --no-deps`) |
+| 4 | Syzygy tablebases (Drive cache or download) |
+| 5 | **Train** — always `--device cuda --gpu`; edit `TRAIN` dict only; auto-stops at iters 160, 180, … |
+| 6 | Optional **manual gate** (SPRT, 128 games / 100 sims) |
+| 7 | Plot `metrics.csv` + gate results |
 
-## Step 4 — Current `TRAIN` defaults (cell 6)
+## Step 4 — Current `TRAIN` defaults (cell 5)
 
 Current recipe: iter **261+** — same as `lightning-ai/run_train.py` except workers **2** (Colab) vs **4** (Lightning). See `TRAINING_CHANGELOG.md`.
 
@@ -51,29 +51,31 @@ Current recipe: iter **261+** — same as `lightning-ai/run_train.py` except wor
 | `games` | 128 | full GPU batch width (`concurrency` matches) |
 | `train_steps` | 800 | ~6× sample reuse at 128 games |
 | `concurrency` | 128 | batched MCTS eval width (one GPU owner) |
-| `selfplay_workers` / `gate_workers` | **2** / **2** | matches Colab 2 vCPU; separate CUDA process per worker |
+| `selfplay_workers` / `gate_workers` | **2** / **2** | matches Colab 2 vCPU; self-play central inference keeps one CUDA owner |
 | `replay_buffer` / `replay_window` | **200k** | ~12 iters at 128 games |
 | `draw_penalty` | 1/3 | football 3-1-0 shaping |
 | `resign` | False | off |
-| `lr` / `lr_min` | **2.5e-4** | flat |
-| `gate_games` / `gate_sims` | **128 / 100** | manual gate cell 7 only |
+| `lr` / `lr_min` | **2.0e-4** | flat |
+| `gate_games` / `gate_sims` | **128 / 100** | manual gate cell 6 only |
 | `gate_exploration_moves` | **0** | after masters book (no temperature) |
 | `gate_openings` | **masters** | 64 prefix-free lines × both colors (=128) |
 | `save_every` | 10 | numbered snapshots |
 | `resume` | True | loads `latest.pt` automatically |
 
-Training auto-stops after completing an iter that is a multiple of **20** (240, 260, …). Re-run cell 6 for the next span. No in-loop auto-gate.
+Training auto-stops after completing an iter that is a multiple of **20** (240, 260, …). Re-run cell 5 for the next span. No in-loop auto-gate.
+
+With CUDA and more than one self-play worker, central inference is enabled by default: the training process owns CUDA and workers do CPU/native search. Legal-only transfer with reusable pinned buffers, native game actors, and CUDA Graphs auto mode are selected when supported; each has a direct eager or non-central fallback.
 
 ## Step 5 — What good looks like
 
 ```
-iter  40 | sims 150 | games 128 | samples 18500 | buffer 200000 | policy_loss 2.1 | value_loss 0.4 | lr 2.500e-04 | 420.0s
+iter  40 | sims 150 | games 128 | samples 18500 | buffer 200000 | policy_loss 2.1 | value_loss 0.4 | lr 2.000e-04 | 420.0s
 ```
 
 - **policy_loss** should trend down over many iterations (not every single iter).
 - **value_loss** should stay meaningful — games need real outcomes, not only max-move truncations.
 - **SPRT PASS** in a manual gate means significant improvement; **INCONCLUSIVE** is normal on short runs.
-- Cell 8 plots are the clearest long-run signal.
+- Cell 7 plots are the clearest long-run signal.
 
 Pure self-play on a free GPU targets club-level strength, not Stockfish.
 
@@ -83,9 +85,9 @@ Checkpoints save to Drive **every iteration** (`latest.pt`, `metrics.csv`, sampl
 
 | Goal | Action |
 |------|--------|
-| **Resume** after disconnect | Re-run cells 1→6. `resume: True` loads `latest.pt`. |
-| **Fresh run** | Empty Drive checkpoint folder, re-run 1→6. |
-| **Compare checkpoints** | Use cell 7 manual gate or download `ckpt_iter_XXXX.pt`. |
+| **Resume** after disconnect | Re-run cells 1→5. `resume: True` loads `latest.pt`. |
+| **Fresh run** | Empty Drive checkpoint folder, re-run 1→5. |
+| **Compare checkpoints** | Use cell 6 manual gate or download `ckpt_iter_XXXX.pt`. |
 
 Numbered snapshots: `ckpt_iter_0000.pt`, `ckpt_iter_0010.pt`, … every `save_every` iters.
 
@@ -114,7 +116,7 @@ python -m engine.inspect_encoding --checkpoint-dir checkpoints
 python -m uci.uci_engine checkpoints/latest.pt
 ```
 
-Legacy Zero checkpoints lack `value_target` metadata: resume with `--value-target root_q` (cell 6 already passes it).
+Legacy Zero checkpoints lack `value_target` metadata: resume with `--value-target root_q` (cell 5 already passes it).
 
 ---
 
@@ -122,10 +124,9 @@ Legacy Zero checkpoints lack `value_target` metadata: resume with `--value-targe
 
 | Problem | Fix |
 |---------|-----|
-| `engine._native` import error | Re-run cell 2; ensure pinned cmake / ninja / build tools installed |
+| `engine._native` import error | Re-run cell 3; ensure pinned cmake / ninja / build tools installed |
 | CUDA torch became CPU-only | Do not `pip install -r requirements.txt` on Colab; reinstall GPU torch and use `--no-deps` |
-| `CUDA available: False` | Step 2 — set GPU runtime |
-| Drive auth failed | Re-run cell 3 |
+| Drive auth failed | Re-run cell 2 |
 | Training "stuck" | One iter can take several minutes at 128 games; watch `metrics.csv` |
 | OOM | Lower `games` / `concurrency` together, or reduce net in checkpoint (fresh start only) |
 | SPRT always INCONCLUSIVE | Normal early; need more gate games or stronger signal |

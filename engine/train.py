@@ -35,6 +35,7 @@ from .first_move_stats import (
     summarize_first_moves_from_shard,
 )
 from .network import ChessNet, NetEvaluator
+from .inference import InferenceSettings
 from .sprt import (
     ALPHA,
     BETA,
@@ -1037,6 +1038,10 @@ def main() -> None:
                         help="concurrent self-play games to batch on GPU")
     parser.add_argument("--selfplay-workers", type=int, default=1,
                         help="parallel self-play worker processes (spawn); 1 = single process")
+    parser.add_argument(
+        "--central-inference", action=argparse.BooleanOptionalAction, default=None,
+        help="route multi-worker CUDA self-play through one parent-owned CUDA evaluator",
+    )
     parser.add_argument("--replay-window", type=int, default=None,
                         help="max persisted replay samples kept on disk")
     parser.add_argument("--batch-size", type=int, default=None,
@@ -1096,6 +1101,16 @@ def main() -> None:
         raise ValueError("--gate-sims must be >= 1")
     if args.selfplay_workers < 1:
         raise ValueError("--selfplay-workers must be >= 1")
+    central_inference = (
+        args.central_inference
+        if args.central_inference is not None
+        else args.device.startswith("cuda") and args.selfplay_workers > 1
+    )
+    if central_inference and (
+        not args.device.startswith("cuda") or args.selfplay_workers <= 1
+    ):
+        print("warning: central inference requires CUDA and multiple workers; using direct batching")
+        central_inference = False
 
     cfg = Config()
     if args.checkpoint_dir:
@@ -1172,6 +1187,7 @@ def main() -> None:
         f"steps={cfg.train.train_steps_per_iteration} "
         f"concurrency={cfg.train.selfplay_concurrency} "
         f"selfplay_workers={args.selfplay_workers} "
+        f"central_inference={'on' if central_inference else 'off'} "
         f"max_moves={cfg.train.max_game_moves} "
         f"lr={cfg.train.learning_rate:.6f} "
         f"lr_min={cfg.train.lr_min:.6f} "
@@ -1284,6 +1300,7 @@ def main() -> None:
             net_cfg=cfg.net,
             device=args.device,
             syzygy_path=cfg.train.syzygy_path,
+            inference=InferenceSettings(enabled=central_inference),
         )
 
     try:
@@ -1323,10 +1340,12 @@ def main() -> None:
                 game_bar.update(1)
 
             if selfplay_pool is not None:
-                worker_weights_path = os.path.join(cfg.train.checkpoint_dir, "_worker_net.pt")
-                os.makedirs(cfg.train.checkpoint_dir or ".", exist_ok=True)
-                model_module = getattr(net, "_orig_mod", net)
-                torch.save({"model": model_module.state_dict()}, worker_weights_path)
+                worker_weights_path: str | None = None
+                if not central_inference:
+                    worker_weights_path = os.path.join(cfg.train.checkpoint_dir, "_worker_net.pt")
+                    os.makedirs(cfg.train.checkpoint_dir or ".", exist_ok=True)
+                    model_module = getattr(net, "_orig_mod", net)
+                    torch.save({"model": model_module.state_dict()}, worker_weights_path)
 
                 def _parallel_selfplay_progress(completed: int) -> None:
                     _tqdm_sync_progress(game_bar, completed)
@@ -1338,6 +1357,7 @@ def main() -> None:
                         simulations=sims,
                         num_games=n_games,
                         on_progress=_parallel_selfplay_progress,
+                        evaluator=evaluator if central_inference else None,
                     )
                 )
                 buffer.extend(parallel_samples)

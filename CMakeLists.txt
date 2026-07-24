@@ -17,6 +17,7 @@ set(IMMORTALITE_ONE_SOURCES
     cpp/movegen.cpp
     cpp/encoding.cpp
     cpp/mcts.cpp
+    cpp/game_actor.cpp
 )
 
 pybind11_add_module(_native MODULE ${IMMORTALITE_ONE_SOURCES})

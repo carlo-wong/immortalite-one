@@ -97,6 +97,7 @@ MctsSession::MctsSession(std::string_view fen, int simulations, const MctsConfig
   }
   need_root_eval_ = true;
   waiting_for_eval_ = true;
+  cache_pending_legal_indices(root_board_);
 }
 
 std::pair<bool, float> MctsSession::terminal_eval(Node& node, const Position& board) {
@@ -146,15 +147,61 @@ void MctsSession::expand_from_eval(Node& node, const Position& board, const floa
     (void)value;
     return;
   }
+  ++nodes_expanded_;
   std::vector<int> idxs;
   idxs.reserve(mapping.size());
   for (auto& [idx, mv] : mapping) idxs.push_back(idx);
-  auto priors = softmax_take(logits, idxs);
+  expand_with_priors(node, mapping, softmax_take(logits, idxs));
+}
+
+void MctsSession::expand_from_legal_eval(Node& node, const Position& board,
+                                         const float* legal_logits, float value) {
+  auto mapping = legal_move_indices(board);
+  if (mapping.empty()) {
+    (void)value;
+    return;
+  }
+  ++nodes_expanded_;
+  std::vector<int> idxs;
+  idxs.reserve(mapping.size());
+  for (auto& [idx, mv] : mapping) idxs.push_back(idx);
+  if (idxs != pending_legal_indices_) {
+    throw std::logic_error("pending legal move indices no longer match leaf");
+  }
+  std::vector<float> priors(legal_logits, legal_logits + mapping.size());
+  const float maxv = *std::max_element(priors.begin(), priors.end());
+  float sum = 0.0f;
+  for (float& prior : priors) {
+    prior = std::exp(prior - maxv);
+    sum += prior;
+  }
+  if (sum > 0.0f) {
+    for (float& prior : priors) prior /= sum;
+  }
+  expand_with_priors(node, mapping, priors);
+}
+
+void MctsSession::expand_with_priors(
+    Node& node, const std::vector<std::pair<int, Move>>& mapping,
+    const std::vector<float>& priors) {
+  if (mapping.size() != priors.size()) {
+    throw std::logic_error("policy priors do not match legal moves");
+  }
   for (size_t i = 0; i < mapping.size(); ++i) {
     auto child = std::make_unique<Node>();
     child->prior = priors[i];
     child->move = mapping[i].second;
     node.children.emplace_back(mapping[i].first, std::move(child));
+  }
+}
+
+void MctsSession::cache_pending_legal_indices(const Position& board) {
+  const auto mapping = legal_move_indices(board);
+  pending_legal_indices_.clear();
+  pending_legal_indices_.reserve(mapping.size());
+  for (const auto& [idx, move] : mapping) {
+    (void)move;
+    pending_legal_indices_.push_back(idx);
   }
 }
 
@@ -224,6 +271,7 @@ void MctsSession::select_to_leaf() {
     waiting_for_eval_ = false;
   } else {
     waiting_for_eval_ = true;
+    cache_pending_legal_indices(path_board_);
   }
 }
 
@@ -241,6 +289,7 @@ void MctsSession::advance_after_expand() {
 
 int MctsSession::positions_needing_eval(float* out_planes, int max_n) {
   if (done_ || !waiting_for_eval_ || max_n <= 0) return 0;
+  if (pending_legal_indices_.empty()) cache_pending_legal_indices(path_board_);
   fill_planes(path_board_, out_planes);
   return 1;
 }
@@ -250,10 +299,12 @@ void MctsSession::apply_eval(const float* logits, const float* values, int n) {
   if (n < 1 || logits == nullptr || values == nullptr) {
     throw std::invalid_argument("apply_eval requires n>=1");
   }
+  ++steps_;
 
   if (need_root_eval_) {
     root_value_ = values[0];
     expand_from_eval(*root_, root_board_, logits, values[0]);
+    pending_legal_indices_.clear();
     root_clean_priors_.clear();
     for (auto& [idx, child] : root_->children) {
       root_clean_priors_[idx] = child->prior;
@@ -270,6 +321,45 @@ void MctsSession::apply_eval(const float* logits, const float* values, int n) {
   Node* leaf = path_.back();
   float value = values[0];
   expand_from_eval(*leaf, path_board_, logits, value);
+  pending_legal_indices_.clear();
+  backup(value);
+  ++sims_done_;
+  waiting_for_eval_ = false;
+
+  if (sims_done_ >= sims_target_) {
+    collect_result();
+    done_ = true;
+    return;
+  }
+  advance_after_expand();
+}
+
+void MctsSession::apply_eval_legal(const float* legal_logits, int legal_count, float value) {
+  if (done_ || !waiting_for_eval_) return;
+  if (legal_logits == nullptr || legal_count != static_cast<int>(pending_legal_indices_.size())) {
+    throw std::invalid_argument("legal logits must match pending legal move count");
+  }
+  ++steps_;
+
+  if (need_root_eval_) {
+    root_value_ = value;
+    expand_from_legal_eval(*root_, root_board_, legal_logits, value);
+    pending_legal_indices_.clear();
+    root_clean_priors_.clear();
+    for (auto& [idx, child] : root_->children) {
+      root_clean_priors_[idx] = child->prior;
+    }
+    if (add_noise_) add_dirichlet_noise(*root_);
+    need_root_eval_ = false;
+    waiting_for_eval_ = false;
+    path_board_ = root_board_;
+    advance_after_expand();
+    return;
+  }
+
+  Node* leaf = path_.back();
+  expand_from_legal_eval(*leaf, path_board_, legal_logits, value);
+  pending_legal_indices_.clear();
   backup(value);
   ++sims_done_;
   waiting_for_eval_ = false;

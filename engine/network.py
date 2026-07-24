@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import chess
 import numpy as np
 import torch
@@ -10,6 +12,7 @@ import torch.nn.functional as F
 
 from .config import NetConfig
 from .encoding import NUM_INPUT_PLANES, POLICY_SIZE, board_to_planes, fill_planes_batch
+from .profile import ProfileCounters
 
 
 class ResidualBlock(nn.Module):
@@ -72,16 +75,166 @@ class ChessNet(nn.Module):
         return torch.sum(probs * self.value_support, dim=-1)
 
 
+class CudaBatchExecutor:
+    """Run fixed-size CUDA graph buckets without changing model semantics."""
+
+    BUCKETS = (8, 16, 32, 64, 128)
+
+    def __init__(
+        self,
+        net: ChessNet,
+        device: str,
+        graph_mode: str = "auto",
+        profile: ProfileCounters | None = None,
+    ):
+        if graph_mode not in {"auto", "on", "off"}:
+            raise ValueError("graph_mode must be 'auto', 'on', or 'off'")
+        self.net = net
+        self.device = torch.device(device)
+        self.graph_mode = graph_mode
+        self.profile = profile
+        self._cuda = self.device.type == "cuda" and torch.cuda.is_available()
+        self._graphs: dict[int, tuple[torch.cuda.CUDAGraph, torch.Tensor, torch.Tensor, torch.Tensor]] = {}
+        self._graph_weight_versions: dict[int, tuple[int, ...]] = {}
+        self._unavailable_buckets: set[int] = set()
+        self._fallback_count = 0
+        self._lane = 0
+        self._host_lanes: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+        self._device_lanes: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+        if self._cuda:
+            self._h2d_stream = torch.cuda.Stream(device=self.device)
+            self._compute_stream = torch.cuda.Stream(device=self.device)
+            self._d2h_stream = torch.cuda.Stream(device=self.device)
+            self._h2d_done = (torch.cuda.Event(), torch.cuda.Event())
+            self._compute_done = (torch.cuda.Event(), torch.cuda.Event())
+            self._d2h_done = (torch.cuda.Event(), torch.cuda.Event())
+
+    @property
+    def graph_fallback_count(self) -> int:
+        return self._fallback_count
+
+    def invalidate_graphs(self) -> None:
+        """Discard captured graphs after model weights or architecture change."""
+        self._graphs.clear()
+        self._graph_weight_versions.clear()
+        self._unavailable_buckets.clear()
+
+    def _weight_versions(self) -> tuple[int, ...]:
+        return tuple(parameter._version for parameter in self.net.parameters())
+
+    def _bucket_for(self, n: int) -> int | None:
+        return next((bucket for bucket in self.BUCKETS if n <= bucket), None)
+
+    def _ensure_lanes(self, bucket: int) -> None:
+        if bucket in self._host_lanes:
+            return
+        shape = (bucket, NUM_INPUT_PLANES, 8, 8)
+        self._host_lanes[bucket] = (
+            torch.empty(shape, dtype=torch.float32, pin_memory=True),
+            torch.empty(shape, dtype=torch.float32, pin_memory=True),
+        )
+        self._device_lanes[bucket] = (
+            torch.empty(shape, dtype=torch.float32, device=self.device),
+            torch.empty(shape, dtype=torch.float32, device=self.device),
+        )
+
+    def _capture_bucket(
+        self, bucket: int
+    ) -> tuple[torch.cuda.CUDAGraph, torch.Tensor, torch.Tensor, torch.Tensor]:
+        static_input = torch.empty(
+            (bucket, NUM_INPUT_PLANES, 8, 8), dtype=torch.float32, device=self.device
+        )
+        # Warm up allocations outside capture so the graph only contains inference.
+        with torch.cuda.stream(self._compute_stream):
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
+                self.net(static_input)
+        torch.cuda.current_stream(self.device).wait_stream(self._compute_stream)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph, stream=self._compute_stream):
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
+                logits, value_logits = self.net(static_input)
+            values = self.net.value_from_logits(value_logits)
+        return graph, static_input, logits, values
+
+    def _eager(self, planes: np.ndarray) -> tuple[torch.Tensor, torch.Tensor]:
+        x = torch.from_numpy(planes).to(self.device)
+        if self._cuda:
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
+                logits, value_logits = self.net(x)
+        else:
+            logits, value_logits = self.net(x)
+        return logits, self.net.value_from_logits(value_logits)
+
+    @torch.inference_mode()
+    def forward(self, planes: np.ndarray) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return dense policy logits and scalar values for pre-encoded planes."""
+        n = int(planes.shape[0])
+        if not self._cuda or self.graph_mode == "off":
+            return self._eager(planes)
+        bucket = self._bucket_for(n)
+        if bucket is None or bucket in self._unavailable_buckets:
+            return self._eager(planes)
+
+        self._ensure_lanes(bucket)
+        lane = self._lane
+        self._lane = 1 - lane
+        host = self._host_lanes[bucket][lane]
+        device_input = self._device_lanes[bucket][lane]
+        host.zero_()
+        host[:n].copy_(torch.from_numpy(planes))
+        h2d_done = self._h2d_done[lane]
+        compute_done = self._compute_done[lane]
+        with torch.cuda.stream(self._h2d_stream):
+            device_input.copy_(host, non_blocking=True)
+            h2d_done.record(self._h2d_stream)
+
+        try:
+            captured = self._graphs.get(bucket)
+            if (
+                captured is not None
+                and self._graph_weight_versions.get(bucket) != self._weight_versions()
+            ):
+                self.invalidate_graphs()
+                captured = None
+            if captured is None:
+                captured = self._capture_bucket(bucket)
+                self._graphs[bucket] = captured
+                self._graph_weight_versions[bucket] = self._weight_versions()
+            graph, static_input, logits, values = captured
+            with torch.cuda.stream(self._compute_stream):
+                self._compute_stream.wait_event(h2d_done)
+                static_input.copy_(device_input)
+                graph.replay()
+                compute_done.record(self._compute_stream)
+            torch.cuda.current_stream(self.device).wait_event(compute_done)
+            return logits[:n], values[:n]
+        except (RuntimeError, torch.cuda.OutOfMemoryError):
+            self._graphs.pop(bucket, None)
+            self._unavailable_buckets.add(bucket)
+            self._fallback_count += 1
+            return self._eager(planes)
+
+
 class NetEvaluator:
     """Wraps a ChessNet for single-position inference used by MCTS."""
 
-    def __init__(self, net: ChessNet, device: str = "cpu"):
+    def __init__(
+        self,
+        net: ChessNet,
+        device: str = "cpu",
+        profile: ProfileCounters | None = None,
+        graph_mode: str = "auto",
+    ):
         self.net = net.to(device).eval()
         self.device = device
+        self.profile = profile
+        self.graph_mode = graph_mode
         self._use_cuda_autocast = str(device).startswith("cuda")
         self._batch_cap = 0
         self._planes_buf: np.ndarray | None = None
         self._host_input: torch.Tensor | None = None
+        self._profile_cuda_events: tuple[torch.cuda.Event, ...] | None = None
+        self._cuda_executor: CudaBatchExecutor | None = None
 
     def _ensure_batch_buffers(self, batch_size: int) -> None:
         if batch_size <= self._batch_cap and self._planes_buf is not None:
@@ -151,13 +304,112 @@ class NetEvaluator:
         n = int(planes.shape[0])
         if n == 0:
             return np.zeros((0, POLICY_SIZE), dtype=np.float32), np.zeros(0, dtype=np.float32)
+        profile = self.profile
+        assembly_started = time.perf_counter() if profile is not None else 0.0
         if planes.dtype != np.float32:
             planes = np.asarray(planes, dtype=np.float32)
-        x = torch.from_numpy(np.ascontiguousarray(planes)).to(self.device)
-        if self._use_cuda_autocast:
+        contiguous = np.ascontiguousarray(planes)
+        if profile is not None:
+            profile.add_seconds("network.input_staging", time.perf_counter() - assembly_started)
+            profile.add_count("network.calls")
+            profile.add_count("network.positions", n)
+            profile.add_bytes("network.input", contiguous.nbytes)
+
+        cuda_events = (
+            profile is not None
+            and self._use_cuda_autocast
+            and self.graph_mode == "off"
+        )
+        h2d_start = h2d_end = forward_start = forward_end = None
+        if cuda_events:
+            if self._profile_cuda_events is None:
+                self._profile_cuda_events = tuple(
+                    torch.cuda.Event(enable_timing=True) for _ in range(4)
+                )
+            h2d_start, h2d_end, forward_start, forward_end = self._profile_cuda_events
+        forward_started = time.perf_counter() if profile is not None else 0.0
+        if self._use_cuda_autocast and self.graph_mode != "off":
+            if self._cuda_executor is None:
+                self._cuda_executor = CudaBatchExecutor(
+                    self.net, self.device, graph_mode=self.graph_mode, profile=profile
+                )
+            logits, value = self._cuda_executor.forward(contiguous)
+        elif self._use_cuda_autocast:
+            assert h2d_start is not None and h2d_end is not None
+            assert forward_start is not None and forward_end is not None
+            h2d_start.record()
+            x = torch.from_numpy(contiguous).to(self.device)
+            h2d_end.record()
+            forward_start.record()
             with torch.autocast(device_type="cuda", dtype=torch.float16):
                 logits, value_logits = self.net(x)
+            value = self.net.value_from_logits(value_logits)
+            forward_end.record()
         else:
+            x = torch.from_numpy(contiguous).to(self.device)
             logits, value_logits = self.net(x)
-        value = self.net.value_from_logits(value_logits)
-        return logits.float().cpu().numpy(), value.float().cpu().numpy()
+            value = self.net.value_from_logits(value_logits)
+        if profile is not None:
+            profile.add_seconds("network.forward_host", time.perf_counter() - forward_started)
+
+        policy_started = time.perf_counter() if profile is not None else 0.0
+        policy = logits.float().cpu().numpy()
+        if profile is not None:
+            profile.add_seconds(
+                "network.policy_d2h_and_sync_host",
+                time.perf_counter() - policy_started,
+            )
+            profile.add_bytes("network.policy_d2h", policy.nbytes)
+        value_started = time.perf_counter() if profile is not None else 0.0
+        values = value.float().cpu().numpy()
+        if profile is not None:
+            profile.add_seconds("network.value_d2h_host", time.perf_counter() - value_started)
+            profile.add_bytes("network.value_d2h", values.nbytes)
+        if cuda_events:
+            profile.add_seconds("network.h2d_cuda", h2d_start.elapsed_time(h2d_end) / 1000.0)
+            profile.add_seconds(
+                "network.forward_cuda", forward_start.elapsed_time(forward_end) / 1000.0
+            )
+        return policy, values
+
+    @torch.inference_mode()
+    def evaluate_legal(
+        self,
+        planes: np.ndarray,
+        legal_indices: np.ndarray,
+        legal_offsets: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Evaluate planes and return policy logits packed in CSR legal-move order."""
+        if planes.ndim != 4 or planes.shape[1:] != (NUM_INPUT_PLANES, 8, 8):
+            raise ValueError(
+                f"planes must have shape (N, {NUM_INPUT_PLANES}, 8, 8), got {planes.shape}"
+            )
+        n = int(planes.shape[0])
+        indices = np.asarray(legal_indices)
+        offsets = np.asarray(legal_offsets)
+        if not np.issubdtype(indices.dtype, np.integer):
+            raise ValueError("legal_indices must be an integer array")
+        if not np.issubdtype(offsets.dtype, np.integer):
+            raise ValueError("legal_offsets must be an integer array")
+        if offsets.shape != (n + 1,):
+            raise ValueError(f"legal_offsets must have shape ({n + 1},), got {offsets.shape}")
+        if offsets[0] != 0 or offsets[-1] != len(indices):
+            raise ValueError("legal_offsets must span legal_indices")
+        if np.any(offsets[1:] < offsets[:-1]):
+            raise ValueError("legal_offsets must be nondecreasing")
+        if np.any(indices < 0) or np.any(indices >= POLICY_SIZE):
+            raise ValueError("legal_indices contain an out-of-range policy index")
+        if n == 0:
+            return np.empty(0, dtype=np.float32), np.empty(0, dtype=np.float32)
+
+        logits, values = self.evaluate_planes(planes)
+        started = time.perf_counter() if self.profile is not None else 0.0
+        gathered = np.empty(len(indices), dtype=np.float32)
+        for row in range(n):
+            start, end = int(offsets[row]), int(offsets[row + 1])
+            gathered[start:end] = logits[row, indices[start:end]]
+        if self.profile is not None:
+            self.profile.add_seconds("network.legal_gather", time.perf_counter() - started)
+            self.profile.add_count("network.legal_gather_calls")
+            self.profile.add_bytes("network.legal_gather", gathered.nbytes)
+        return gathered, values
