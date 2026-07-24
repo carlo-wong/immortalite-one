@@ -41,7 +41,7 @@ Or: [colab.research.google.com](https://colab.research.google.com) → **File �
 
 ## Step 4 — Current `TRAIN` defaults (cell 5)
 
-Current recipe: iter **261+** — same as `lightning-ai/run_train.py` except workers **2** (Colab) vs **4** (Lightning). See `TRAINING_CHANGELOG.md`.
+Current recipe: iter **361+** — same as `lightning-ai/run_train.py` except workers **2** (Colab) vs **4** (Lightning). See `TRAINING_CHANGELOG.md`.
 
 | Key | Value | Notes |
 |-----|-------|-------|
@@ -51,16 +51,19 @@ Current recipe: iter **261+** — same as `lightning-ai/run_train.py` except wor
 | `games` | 128 | full GPU batch width (`concurrency` matches) |
 | `train_steps` | 800 | ~6× sample reuse at 128 games |
 | `concurrency` | 128 | batched MCTS eval width (one GPU owner) |
-| `selfplay_workers` / `gate_workers` | **2** / **2** | self-play: central inference; gates: native actors ignore `gate_workers` (single CUDA owner + `gate_concurrency`) |
+| `selfplay_workers` / `gate_workers` | **2** / **2** | self-play: central inference; gates: see note below |
 | `replay_buffer` / `replay_window` | **200k** | ~12 iters at 128 games |
 | `draw_penalty` | 1/3 | football 3-1-0 shaping |
 | `resign` | False | off |
-| `lr` / `lr_min` | **1.5e-4** | flat (row 341+) |
+| `lr` / `lr_min` | **1.0e-4** | flat (row 361+) |
 | `gate_games` / `gate_sims` | **256 / 100** | manual gate cell 6 only |
+| `gate_concurrency` | **128** | gate parallelization knob (native path) |
 | `gate_exploration_moves` | **0** | after masters book (no temperature) |
 | `gate_openings` | **masters** | 128 prefix-free lines × both colors (=256) |
 | `save_every` | 10 | numbered snapshots |
 | `resume` | True | loads `latest.pt` automatically |
+
+**Why gates ignore `gate_workers`:** Immortalite One’s fast gate path loads **two** nets (A and B) on **one** CUDA process and runs many games via `gate_concurrency`. Splitting across workers would either duplicate both nets per worker (VRAM blow-up) or need a dual-net central-inference server (not implemented). Self-play can use multiple workers because it has a **single** net + central inference. To speed gates, raise `gate_concurrency` (already 128), not `gate_workers`.
 
 Training auto-stops after completing an iter that is a multiple of **20** (240, 260, …). Re-run cell 5 for the next span. No in-loop auto-gate.
 
@@ -69,12 +72,12 @@ With CUDA and more than one self-play worker, central inference is enabled by de
 ## Step 5 — What good looks like
 
 ```
-iter  40 | sims 150 | games 128 | samples 18500 | buffer 200000 | policy_loss 2.1 | value_loss 0.4 | lr 1.500e-04 | 420.0s
+iter  40 | sims 150 | games 128 | samples 18500 | buffer 200000 | policy_loss 2.1 | value_loss 0.4 | lr 1.000e-04 | 420.0s
 ```
 
 - **policy_loss** should trend down over many iterations (not every single iter).
 - **value_loss** should stay meaningful — games need real outcomes, not only max-move truncations.
-- **Next manual gate (cell 6):** **360 vs 340** (`CHECKPOINT_A=360`, `CHECKPOINT_B=340`).
+- **Next manual gate (cell 6):** **380 vs 360** (`CHECKPOINT_A=380`, `CHECKPOINT_B=360`).
 - **SPRT PASS** in a manual gate means significant improvement; **INCONCLUSIVE** is normal on short runs.
 - Cell 7 plots are the clearest long-run signal.
 

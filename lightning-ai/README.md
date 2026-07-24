@@ -1,6 +1,6 @@
 # Training Immortalite One on Lightning AI
 
-Self-play on a Lightning AI Studio GPU via `run_train.py` (optional gate scripts can be ported from Immortalite Zero). During migration, only the repository changes: Immortalite One deliberately reuses Zero's existing sibling `results/` and `syzygy345/` folders.
+Self-play on a Lightning AI Studio GPU via `run_train.py`, `run_gate.py`, and `run_train_and_gate.py`. During migration, only the repository changes: Immortalite One deliberately reuses Zero's existing sibling `results/` and `syzygy345/` folders.
 
 ---
 
@@ -12,6 +12,8 @@ parent/
 ├── immortalite-one/        # git clone
 │   └── lightning-ai/
 │       ├── run_train.py
+│       ├── run_gate.py
+│       ├── run_train_and_gate.py
 │       └── paths.py
 ├── results/                # existing Zero checkpoints/shards; reused directly
 │   ├── latest.pt
@@ -65,11 +67,18 @@ nohup python lightning-ai/run_train.py > ../results/train.log 2>&1 &
 tail -f ../results/train.log
 ```
 
+Or train to the next ×20 milestone **and** gate automatically:
+
+```bash
+nohup python lightning-ai/run_train_and_gate.py > ../results/train_and_gate.log 2>&1 &
+tail -f ../results/train_and_gate.log
+```
+
 Writes `latest.pt`, `metrics.csv`, shards every iteration to `../results/`. Training survives browser close (~4h studio limit still applies).
 
 ### Current `TRAIN` defaults
 
-Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T4 has 4 vCPUs; Colab is 2). Current row: iter **341+** (`sims=150`, LR **1.5e-4** flat, `move_temperature=4` / 10 plies). Next gate **360 vs 340**. See `colab/README.md` and `TRAINING_CHANGELOG.md`.
+Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T4 has 4 vCPUs; Colab is 2). Current row: iter **361+** (`sims=150`, LR **1.0e-4** flat, `move_temperature=4` / 10 plies). Next gate **380 vs 360**. See `colab/README.md` and `TRAINING_CHANGELOG.md`.
 
 | Key | Value |
 |-----|-------|
@@ -83,14 +92,24 @@ Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T
 | `resign` | off |
 | `replay_buffer` / `replay_window` | 200k |
 | `gate_games` / `gate_sims` | **256** / **100** (gates stay 100) |
+| `gate_concurrency` | **128** (native gate parallelization) |
 | `gate_exploration_moves` / `gate_openings` | 0 / masters (128×2 colors) |
-| `lr` / `lr_min` | **1.5e-4** flat |
-| Training span | auto-stops at iters 260, 280, … (multiples of 20) |
+| `lr` / `lr_min` | **1.0e-4** flat |
+| Training span | auto-stops at iters 360, 380, … (multiples of 20) |
 | `RESET_OPTIMIZER` | `False` |
 
 ### Gating
 
-In-loop gating is off (`--gate-every 0`). For SPRT matches, call `engine.train.play_match` (or Colab cell 6) — gates use the native actor + dual-evaluator path when `engine._native` is built. Zero's `run_gate.py` still works against shared `.pt` files if needed.
+In-loop gating is off (`--gate-every 0`). Manual gate:
+
+```bash
+# edit CHECKPOINT_A / CHECKPOINT_B in run_gate.py first (defaults: 380 vs 360)
+python lightning-ai/run_gate.py
+```
+
+Or use Colab cell 6. Gates use the native actor + dual-evaluator path when `engine._native` is built.
+
+**Why `gate_workers` is ignored on the native path:** a strength gate needs **two** nets on GPU. The fast path keeps both evaluators in one process and packs games with `gate_concurrency`. Multi-worker split would either copy both nets into every worker (VRAM) or require dual-net central inference (not built). Self-play multi-worker works because it is a **single** net + central inference. Speed gates with `gate_concurrency`, not more `gate_workers`.
 
 ## Step 3 — Sessions and resuming
 
@@ -122,6 +141,7 @@ Legacy Zero checkpoints lack `value_target` metadata: resume with an explicit `-
 | Syzygy incomplete | All 145 `.rtbw` in `syzygy345/` sibling folder |
 | `results/` not found | Sibling of repo, not inside it |
 | Slow self-play | Keep `concurrency` = `games`; `selfplay_workers=4` on Lightning (4 vCPUs). Colab bench only tested 2 |
+| Slow gates / workers ignored | Expected on native path — raise `gate_concurrency` |
 | OOM | Lower `games` and `concurrency` together |
 
 Recipe history: **[TRAINING_CHANGELOG.md](../TRAINING_CHANGELOG.md)**

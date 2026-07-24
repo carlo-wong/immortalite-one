@@ -24,9 +24,10 @@ Gates run every 20 iters vs the checkpoint **20 iters ago**. Edit only the `TRAI
 | **241** | **128** | **800** | **128** | **2**/4 | **200k** | **128 games** (Elo CI) | **2.5e-4 flat** | same as 161 + **move_temperature=4.0** for first **10** plies (sampling only); log `metrics_first_moves.csv`; **100 sims** |
 | **261** | **128** | **800** | **128** | **2**/4 | **200k** | **128 games** (Elo CI), **gate_sims=100** | **2.5e-4 flat** | same as 241 + **self-play sims 150** (gate stays 100); keep T=4 / 10 plies |
 | **321** | **128** | **800** | **128** | **2**/4 | **200k** | **128 games** (Elo CI), **gate_sims=100** | **2.0e-4 flat** | same as 261; LR step-down 2.5e-4 → 2.0e-4 |
-| **341** | **128** | **800** | **128** | **2**/4 | **200k** | **128 games** (Elo CI), **gate_sims=100** | **1.5e-4 flat** | same as 321; finish LR step-down 2.0e-4 → 1.5e-4; next gate **360 vs 340** |
+| **341** | **128** | **800** | **128** | **2**/4 | **200k** | **128 / 256 games** (Elo CI), **gate_sims=100** | **1.5e-4 flat** | same as 321; LR 2.0e-4 → 1.5e-4; gate **360 vs 340** PASS @256 (+45 Elo, LB +6.4) |
+| **361** | **128** | **800** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | same as 341; escalate LR 1.5e-4 → 1.0e-4 (clip abort); next gate **380 vs 360** |
 
-**Current row:** start **341** — same as 321 with **LR / lr_min = 1.5e-4 flat**. Resume from `latest.pt`. Do **not** use `--reset-optimizer`. Manual gate after the block: **360 vs 340**.
+**Current row:** start **361** — same as 341 with **LR / lr_min = 1.0e-4 flat**. Resume from `latest.pt`. Do **not** use `--reset-optimizer`. Manual gate after the block: **380 vs 360**.
 
 Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net only with a new `--checkpoint-dir`.
 
@@ -137,9 +138,16 @@ Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net o
 
 - Same as 261 except **LR / lr_min = 2.0e-4** (partial clip-cure step). Native One self-play throughput regime.
 
-### Iter 341 — LR 1.5e-4 flat (current)
+### Iter 341 — LR 1.5e-4 flat
 
-- Same as 321 except **LR / lr_min = 1.5e-4** (finish the clip-cure step). Hold sims/T/buffer/games/steps.
-- Next manual gate: **360 vs 340** (Colab cell 6: `CHECKPOINT_A=360`, `CHECKPOINT_B=340`).
+- Same as 321 except **LR / lr_min = 1.5e-4** (finish the prior clip-cure step). Hold sims/T/buffer/games/steps.
+- Gate **360 vs 340**: INCONCLUSIVE at 128 games; **PASS at 256** (+45.04 Elo, LB +6.36). Grad clip saturation did not cool (mean grad_norm ~12.35).
+
+### Iter 361 — LR 1.0e-4 flat (current)
+
+- Same as 341 except **LR / lr_min = 1.0e-4** (last LR rung before floor; clip abort after 1.5e-4 failed to restore headroom).
+- Hold sims 150 / gate_sims 100 / T=4 / buffer 200k / games 128 / steps 800 / `root_q`.
+- Next manual gate: **380 vs 360** (Colab cell 6 / `lightning-ai/run_gate.py`: `CHECKPOINT_A=380`, `CHECKPOINT_B=360`).
+- Lightning: `python lightning-ai/run_train.py` or combined `python lightning-ai/run_train_and_gate.py`.
 
 Last updated: 2026-07-24.

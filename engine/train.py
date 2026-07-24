@@ -613,8 +613,9 @@ def play_match(net_a: ChessNet, net_b: ChessNet, cfg: Config,
 
         if workers > 1:
             print(
-                f"gate: native actor path (single CUDA owner); "
-                f"ignoring workers={workers}, using concurrency="
+                f"gate: native dual-net path keeps both nets on one CUDA process "
+                f"(avoids 2×VRAM × workers); ignoring workers={workers}, "
+                f"parallelizing via concurrency="
                 f"{match_cfg.train.selfplay_concurrency}"
             )
         merged = play_match_batched_native_actors(
