@@ -25,7 +25,7 @@ CHECKPOINT_B: int | str = 360
 GATE_GAMES = 256
 GATE_SIMS = 100
 GATE_WORKERS = 4
-GATE_CONCURRENCY = 128
+GATE_CONCURRENCY = 256
 # Masters book forces starts; no temperature after book (matches Colab TRAIN).
 GATE_EXPLORATION_MOVES = 0
 GATE_OPENINGS = "masters"  # "masters" | "none" | path to TSV

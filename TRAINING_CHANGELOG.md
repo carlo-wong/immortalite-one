@@ -148,6 +148,7 @@ Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net o
 - Same as 341 except **LR / lr_min = 1.0e-4** (last LR rung before floor; clip abort after 1.5e-4 failed to restore headroom).
 - Hold sims 150 / gate_sims 100 / T=4 / buffer 200k / games 128 / steps 800 / `root_q`.
 - **Remove training ply cap:** `max_game_moves` **200 → 10_000** (matches strength-gate policy). Games resolve by checkmate / Syzygy / fifty-move / threefold instead of `max_moves` truncation labels.
+- **Gate concurrency 128 → 256** (native dual-net path; `gate_workers` still ignored).
 - Next manual gate: **380 vs 360** (Colab cell 6 / `lightning-ai/run_gate.py`: `CHECKPOINT_A=380`, `CHECKPOINT_B=360`).
 - Lightning: `python lightning-ai/run_train.py` or combined `python lightning-ai/run_train_and_gate.py`.
 

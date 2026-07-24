@@ -19,7 +19,7 @@ Immortalite One moves board, encoding, and MCTS into **C++** (`engine._native`).
 
 ## Strength gates
 
-Manual SPRT gates (`play_match` / Colab cell 6) use the same native `GameActorBatch` stack as self-play when the extension is built: dual `NetEvaluator` in one process (single CUDA owner), masters openings via per-actor `start_moves`, and `pending_net_ids` for A/B routing. `gate_workers>1` is ignored on this path — set `gate_concurrency` (default 128) instead. Falls back to the legacy dual-worker CUDA path only if native actors are unavailable.
+Manual SPRT gates (`play_match` / Colab cell 6) use the same native `GameActorBatch` stack as self-play when the extension is built: dual `NetEvaluator` in one process (single CUDA owner), masters openings via per-actor `start_moves`, and `pending_net_ids` for A/B routing. `gate_workers>1` is ignored on this path — set `gate_concurrency` (default 256) instead. Falls back to the legacy dual-worker CUDA path only if native actors are unavailable.
 
 ## Fast paths and fallbacks
 
