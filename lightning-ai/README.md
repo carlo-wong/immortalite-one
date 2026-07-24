@@ -40,14 +40,12 @@ python scripts/download_syzygy345.py --out syzygy345
 
 ---
 
-## Step 1 — Studio setup
+## Step 1 — Studio setup (copy-paste)
 
-1. Create a GPU studio.
-2. Clone the repo.
-3. Keep the existing Zero `results/` and `syzygy345/` next to the new One repo.
-4. Install deps and compile the native extension (keep preinstalled CUDA torch):
+One requires a compiled C++ extension (`engine._native`). Running `python lightning-ai/run_train*.py` alone is not enough until this succeeds. Re-run after a fresh studio, env wipe, or C++ changes after `git pull`.
 
 ```bash
+cd /teamspace/studios/this_studio/immortalite-one
 sudo apt-get install -y build-essential ninja-build python3-dev
 pip install -q "cmake>=3.26,<4.0" ninja pybind11 scikit-build-core
 pip install -q python-chess numpy tqdm
@@ -55,7 +53,9 @@ pip install -q -e . --no-deps
 python -c "import torch; from engine import _native; print(torch.__version__, torch.version.cuda, _native.version())"
 ```
 
-`--no-deps` uses **scikit-build-core** + **pybind11** already installed above to compile `cpp/` into `engine._native` without touching torch.
+`--no-deps` compiles `cpp/` into `engine._native` without replacing Lightning’s preinstalled CUDA torch. Do **not** `pip install -r requirements.txt` on the studio.
+
+If import fails with a “circular import” message for `_native`, the extension is missing — re-run the block above (not a real circular import).
 
 ## Step 2 — Train
 
