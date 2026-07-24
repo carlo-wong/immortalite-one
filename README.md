@@ -11,6 +11,8 @@ Compatible with Immortalite Zero `.pt` checkpoints, `samples_iter_*.npz` shards,
 | `cpp/` | Native core (board, movegen, encoding, MCTS, bindings) |
 | `engine/` | Python package — `python -m engine.train` |
 | `uci/` | UCI front-end (`python -m uci.uci_engine [ckpt.pt]`) |
+| `server/app.py` | FastAPI `/analyze` + serves GUI |
+| `web/` | Localhost analysis GUI (`/app/`) |
 | `colab/` | Colab notebook (Drive checkpoints + native build) |
 | `lightning-ai/` | Lightning AI `run_train.py` |
 | `tests/` | Encoding / MCTS parity vs Python oracle |
@@ -48,6 +50,10 @@ python scripts/bench_mcts.py --sims 32 --searches 40
 # UCI (Arena / CuteChess / Lichess local)
 python -m uci.uci_engine path/to/latest.pt
 
+# Analysis server + GUI
+python -m uvicorn server.app:app --port 8000
+# http://localhost:8000/app/
+
 # Short train smoke (CPU)
 python -m engine.train --iterations 1 --device cpu --light \
   --games 2 --train-steps 4 --concurrency 2 --selfplay-workers 1 \
@@ -56,6 +62,14 @@ python -m engine.train --iterations 1 --device cpu --light \
 ```
 
 Self-play uses native `MctsSession` + batched `evaluate_planes` when `engine._native` is available. Force Python MCTS with `IMMORTALITE_ONE_FORCE_PYTHON=1`.
+
+The analysis server auto-discovers `results/latest.pt`, then `checkpoints/latest.pt`, unless `IMMORTALITE_ONE_CHECKPOINT` is set. Optional: `IMMORTALITE_ONE_DEVICE=cuda`.
+
+```bash
+# Windows (PowerShell)
+$env:IMMORTALITE_ONE_CHECKPOINT="results\latest.pt"
+python -m uvicorn server.app:app --port 8000
+```
 
 ### Microbench (example, Windows CPU)
 

@@ -17,7 +17,7 @@ Invoke with `/agent-name` or via the Task tool (`subagent_type`).
 | `performance-engineer` | Self-play throughput, CPU vs GPU bottlenecks, sim budgets |
 | `test-automator` | Parity suites vs Immortalite Zero (encoding, MCTS, terminals), CI |
 | `software-architect` | Hybrid boundary decisions, compatibility contracts, module layout |
-| `fastapi-developer` | Analysis API (`server/`) when ported |
+| `fastapi-developer` | Analysis API (`server/app.py`), `/analyze`, static GUI |
 | `data-scientist` | Training curves, self-play metrics, gating/eval stats |
 | `ab-test-analysis` | SPRT gating — accept/reject candidate nets |
 | `debugger` | Training crashes, encoding mismatches, wrong eval, UCI bugs, native segfaults |
@@ -46,7 +46,8 @@ Built-in Task types (not in this folder): `explore`, `shell`, `bugbot`, `securit
 | Native extension | pybind11 module via CMake / scikit-build-core |
 | Cloud training | `colab/train.ipynb`, `lightning-ai/` |
 | UCI | `uci/uci_engine.py` |
-| Analysis API | `server/` (later) |
+| Analysis API | `server/app.py` — `/analyze`, `/health`, `/explorer`; GUI at `/app/` |
+| Web GUI | `web/index.html`, `web/chess.js` |
 | Tests / parity | `tests/` (encoding + MCTS vs Immortalite Zero oracle) |
 | Compat artifacts | `.pt` checkpoints, `samples_iter_*.npz`, `ENCODING_VERSION = 2` |
 

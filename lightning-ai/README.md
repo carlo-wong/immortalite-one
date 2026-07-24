@@ -1,6 +1,6 @@
 # Training Immortalite One on Lightning AI
 
-Self-play on a Lightning AI Studio GPU via `run_train.py` (optional gate scripts can be ported from Immortalite Zero). Same recipe as Colab (except 4 self-play workers), but checkpoints and Syzygy live in **sibling folders** you upload manually between sessions.
+Self-play on a Lightning AI Studio GPU via `run_train.py` (optional gate scripts can be ported from Immortalite Zero). During migration, only the repository changes: Immortalite One deliberately reuses Zero's existing sibling `results/` and `syzygy345/` folders.
 
 ---
 
@@ -8,16 +8,17 @@ Self-play on a Lightning AI Studio GPU via `run_train.py` (optional gate scripts
 
 ```
 parent/
+├── immortalite-zero/       # previous repo; may remain alongside One
 ├── immortalite-one/        # git clone
 │   └── lightning-ai/
 │       ├── run_train.py
 │       └── paths.py
-├── results/                # upload before each session
+├── results/                # existing Zero checkpoints/shards; reused directly
 │   ├── latest.pt
 │   ├── metrics.csv
 │   ├── metrics_gates.csv
 │   └── ckpt_iter_XXXX.pt
-└── syzygy345/              # 145 .rtbw files (~378 MB)
+└── syzygy345/              # existing Zero tablebases; reused directly
 ```
 
 Build Syzygy locally once:
@@ -31,7 +32,7 @@ python scripts/download_syzygy345.py --out syzygy345
 ## Before you start
 
 - Lightning AI account with GPU studio.
-- `results/` and `syzygy345/` as **siblings** of the repo (not inside it).
+- Keep the existing Zero `results/` and `syzygy345/` as **siblings** of the new One repo; do not rename or copy them.
 - Push engine changes to GitHub; `git pull` before `run_train.py`.
 - **Native extension required:** build `engine._native` once per studio with `pip install -e . --no-deps` (see Step 1). Do **not** `pip install -r requirements.txt` on Lightning — that can replace the studio CUDA torch.
 
@@ -41,7 +42,7 @@ python scripts/download_syzygy345.py --out syzygy345
 
 1. Create a GPU studio.
 2. Clone the repo.
-3. Upload `results/` and `syzygy345/` next to the repo.
+3. Keep the existing Zero `results/` and `syzygy345/` next to the new One repo.
 4. Install deps and compile the native extension (keep preinstalled CUDA torch):
 
 ```bash

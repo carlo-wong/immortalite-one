@@ -150,10 +150,30 @@ class PyMctsSession {
     d["clean_priors"] = to_numpy(r.clean_priors);
     d["root_value"] = r.root_value;
     d["improved_policy"] = to_numpy(r.improved_policy(session_->config()));
+    d["tree"] = tree_to_list(session_->export_tree(32));
     return d;
   }
 
  private:
+  static py::dict exported_node_to_dict(const immortalite::ExportedNode& n) {
+    py::dict d;
+    d["index"] = n.index;
+    d["move"] = n.move_uci;
+    d["N"] = n.N;
+    d["W"] = n.W;
+    d["prior"] = n.prior;
+    py::list children;
+    for (const auto& c : n.children) children.append(exported_node_to_dict(c));
+    d["children"] = children;
+    return d;
+  }
+
+  static py::list tree_to_list(const std::vector<immortalite::ExportedNode>& nodes) {
+    py::list out;
+    for (const auto& n : nodes) out.append(exported_node_to_dict(n));
+    return out;
+  }
+
   std::unique_ptr<immortalite::MctsSession> session_;
 };
 

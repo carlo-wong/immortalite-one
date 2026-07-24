@@ -11,6 +11,7 @@ Step-by-step guide for the free Colab GPU workflow. Open `colab/train.ipynb` and
 - A **Google account** (Colab + Drive).
 - Code on GitHub: `github.com/carlo-wong/immortalite-one` — `git push` after local changes so Colab can `git pull`.
 - **Native extension:** cell 2 installs pinned `cmake>=3.26,<4.0` and runs `pip install -e . --no-deps` so Colab’s CUDA torch is not replaced. Training will not run without `engine._native`. See [docs/BUILD.md](../docs/BUILD.md) for wheels / troubleshooting.
+- **Existing training data:** during migration, the notebook reads and writes `MyDrive/immortalite_zero_checkpoints` directly.
 - **Syzygy:** cell 5 copies `syzygy345/` from Drive if present, or downloads once into your checkpoint folder.
 
 ---
@@ -31,7 +32,7 @@ Or: [colab.research.google.com](https://colab.research.google.com) → **File �
 |------|--------------|
 | 1 | Clone repo + `git pull` |
 | 2 | Pin cmake + **build native extension** (`pip install -e . --no-deps`) |
-| 3 | Mount Drive → `MyDrive/immortalite_one_checkpoints` |
+| 3 | Mount Drive → existing `MyDrive/immortalite_zero_checkpoints` |
 | 4 | Confirm GPU, set `--gpu` preset |
 | 5 | Syzygy tablebases (Drive cache or download) |
 | 6 | **Train** — edit `TRAIN` dict only; auto-stops at iters 160, 180, … |

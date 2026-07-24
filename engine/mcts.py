@@ -94,6 +94,34 @@ def _board_root_fen_and_moves(board: chess.Board) -> tuple[str, list[str]]:
     return root.fen(), moves
 
 
+def _node_from_export(data: Any) -> _Node:
+    """Rebuild a Python ``_Node`` from a native ``export_tree`` dict."""
+    move_uci = _attr(data, "move")
+    move = chess.Move.from_uci(move_uci) if move_uci else None
+    node = _Node(float(_attr(data, "prior")), move=move)
+    node.N = int(_attr(data, "N"))
+    node.W = float(_attr(data, "W"))
+    for child in _attr(data, "children") or ():
+        node.children[int(_attr(child, "index"))] = _node_from_export(child)
+    return node
+
+
+def _root_from_native_tree(raw: Any) -> _Node:
+    """Build SearchResult ``_root`` from native result ``tree`` (list of root children)."""
+    root = _Node(0.0)
+    if isinstance(raw, dict):
+        tree = raw.get("tree")
+    else:
+        tree = getattr(raw, "tree", None)
+    if not tree:
+        return root
+    for child in tree:
+        root.children[int(_attr(child, "index"))] = _node_from_export(child)
+    if root.children:
+        root.N = sum(c.N for c in root.children.values())
+    return root
+
+
 class _NativeMCTSAdapter:
     """Drive ``engine._native.MctsSession`` step API with PyTorch eval."""
 
@@ -159,7 +187,7 @@ class _NativeMCTSAdapter:
             priors=np.asarray(_attr(raw, "priors"), dtype=np.float64),
             clean_priors=np.asarray(_attr(raw, "clean_priors"), dtype=np.float64),
             root_value=float(_attr(raw, "root_value")),
-            _root=_Node(0.0),
+            _root=_root_from_native_tree(raw),
             _board=board,
             _cfg=self.cfg,
         )

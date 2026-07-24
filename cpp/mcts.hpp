@@ -36,6 +36,16 @@ struct MctsResult {
   std::vector<double> improved_policy(const MctsConfig& cfg) const;
 };
 
+// Serializable MCTS node for Python PV reconstruction (policy index keyed).
+struct ExportedNode {
+  int index = -1;
+  std::string move_uci;
+  int N = 0;
+  double W = 0.0;
+  float prior = 0.0f;
+  std::vector<ExportedNode> children;
+};
+
 class MctsSession {
  public:
   // `fen` is the position to search. Optional `moves_from_fen` is applied first
@@ -58,6 +68,10 @@ class MctsSession {
   const MctsResult& result() const { return result_; }
   MctsConfig& config() { return cfg_; }
   const MctsConfig& config() const { return cfg_; }
+
+  // Export root children (and expanded subtrees) for Python PV walking.
+  // max_depth = max plies below the root (default covers GUI pv_len=8).
+  std::vector<ExportedNode> export_tree(int max_depth = 32) const;
 
  private:
   struct Node {
@@ -84,6 +98,7 @@ class MctsSession {
   std::pair<int, Node*> select_child(Node& node) const;
   void collect_result();
   void advance_after_expand();
+  static ExportedNode export_node(int idx, const Node& node, int depth_left);
 
   MctsConfig cfg_;
   int sims_target_ = 0;

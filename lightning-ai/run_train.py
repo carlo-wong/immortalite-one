@@ -2,7 +2,7 @@
 """Self-play training for Lightning AI (terminal / nohup).
 
 Runs in the terminal so training continues after you close the browser.
-Sibling-folder layout: ../results and ../syzygy345.
+Reuses Immortalite Zero's sibling folders: ../results and ../syzygy345.
 
 Example (background, survives browser close):
   cd immortalite-one

@@ -5,6 +5,10 @@ numpy
 torch>=2.0
 tqdm
 
+# Analysis server
+fastapi>=0.110
+uvicorn[standard]>=0.27
+
 # Native extension build (scikit-build-core + pybind11)
 pybind11>=2.12
 scikit-build-core>=0.10

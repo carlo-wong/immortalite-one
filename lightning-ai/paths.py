@@ -1,4 +1,4 @@
-"""Resolve Lightning AI sibling-folder layout (results/, syzygy345/)."""
+"""Reuse Immortalite Zero's Lightning sibling folders (results/, syzygy345/)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ class LightningPaths:
 
 
 def resolve_paths() -> LightningPaths:
-    """Repo is immortalite-one/; results/ and syzygy345/ are its siblings."""
+    """Only the repo changes; existing Zero results/ and syzygy345/ stay put."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     candidate = os.path.abspath(os.path.join(script_dir, ".."))
     if os.path.isdir(os.path.join(candidate, "engine")):

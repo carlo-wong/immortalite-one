@@ -17,7 +17,14 @@ import torch
 
 from .config import BeautyConfig, Config, MCTSConfig, NetConfig, TrainConfig
 from .encoding import POLICY_SIZE, board_to_planes
-from .mcts import MCTS, SearchResult, _board_root_fen_and_moves, _load_native, _native_search_ready
+from .mcts import (
+    MCTS,
+    SearchResult,
+    _board_root_fen_and_moves,
+    _load_native,
+    _native_search_ready,
+    _root_from_native_tree,
+)
 from .network import ChessNet, NetEvaluator
 
 _EXPLORATION_MOVES = 20  # sample from the policy for this many plies, then argmax
@@ -48,8 +55,6 @@ def _mcts_cfg_dict(cfg: Config) -> dict[str, Any]:
 
 
 def _coerce_native_result(raw: Any, board: chess.Board, cfg: Config) -> SearchResult:
-    from ._python_mcts import _Node
-
     moves = list(raw["moves"] if isinstance(raw, dict) else raw.moves)
     if moves and isinstance(moves[0], str):
         moves = [chess.Move.from_uci(m) for m in moves]
@@ -65,7 +70,7 @@ def _coerce_native_result(raw: Any, board: chess.Board, cfg: Config) -> SearchRe
             raw["clean_priors"] if isinstance(raw, dict) else raw.clean_priors, dtype=np.float64
         ),
         root_value=float(raw["root_value"] if isinstance(raw, dict) else raw.root_value),
-        _root=_Node(0.0),
+        _root=_root_from_native_tree(raw),
         _board=board,
         _cfg=cfg.mcts,
     )

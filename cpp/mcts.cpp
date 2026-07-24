@@ -299,4 +299,31 @@ void MctsSession::collect_result() {
   }
 }
 
+ExportedNode MctsSession::export_node(int idx, const Node& node, int depth_left) {
+  ExportedNode out;
+  out.index = idx;
+  if (!node.move.null()) out.move_uci = move_to_uci(node.move);
+  out.N = node.N;
+  out.W = node.W;
+  out.prior = node.prior;
+  if (depth_left <= 0) return out;
+  out.children.reserve(node.children.size());
+  for (const auto& [cidx, child] : node.children) {
+    if (!child) continue;
+    out.children.push_back(export_node(cidx, *child, depth_left - 1));
+  }
+  return out;
+}
+
+std::vector<ExportedNode> MctsSession::export_tree(int max_depth) const {
+  std::vector<ExportedNode> out;
+  if (!root_ || max_depth <= 0) return out;
+  out.reserve(root_->children.size());
+  for (const auto& [idx, child] : root_->children) {
+    if (!child) continue;
+    out.push_back(export_node(idx, *child, max_depth - 1));
+  }
+  return out;
+}
+
 }  // namespace immortalite
