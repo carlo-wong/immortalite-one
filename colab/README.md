@@ -55,7 +55,7 @@ Current recipe: iter **261+** — same as `lightning-ai/run_train.py` except wor
 | `replay_buffer` / `replay_window` | **200k** | ~12 iters at 128 games |
 | `draw_penalty` | 1/3 | football 3-1-0 shaping |
 | `resign` | False | off |
-| `lr` / `lr_min` | **2.0e-4** | flat |
+| `lr` / `lr_min` | **1.5e-4** | flat (row 341+) |
 | `gate_games` / `gate_sims` | **128 / 100** | manual gate cell 6 only |
 | `gate_exploration_moves` | **0** | after masters book (no temperature) |
 | `gate_openings` | **masters** | 64 prefix-free lines × both colors (=128) |
@@ -69,11 +69,12 @@ With CUDA and more than one self-play worker, central inference is enabled by de
 ## Step 5 — What good looks like
 
 ```
-iter  40 | sims 150 | games 128 | samples 18500 | buffer 200000 | policy_loss 2.1 | value_loss 0.4 | lr 2.000e-04 | 420.0s
+iter  40 | sims 150 | games 128 | samples 18500 | buffer 200000 | policy_loss 2.1 | value_loss 0.4 | lr 1.500e-04 | 420.0s
 ```
 
 - **policy_loss** should trend down over many iterations (not every single iter).
 - **value_loss** should stay meaningful — games need real outcomes, not only max-move truncations.
+- **Next manual gate (cell 6):** **360 vs 340** (`CHECKPOINT_A=360`, `CHECKPOINT_B=340`).
 - **SPRT PASS** in a manual gate means significant improvement; **INCONCLUSIVE** is normal on short runs.
 - Cell 7 plots are the clearest long-run signal.
 

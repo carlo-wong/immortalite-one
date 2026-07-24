@@ -69,7 +69,7 @@ Writes `latest.pt`, `metrics.csv`, shards every iteration to `../results/`. Trai
 
 ### Current `TRAIN` defaults
 
-Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T4 has 4 vCPUs; Colab is 2). Current row: iter **261+** (`sims=150`, `move_temperature=4` / 10 plies). See `colab/README.md` and `TRAINING_CHANGELOG.md`.
+Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T4 has 4 vCPUs; Colab is 2). Current row: iter **341+** (`sims=150`, LR **1.5e-4** flat, `move_temperature=4` / 10 plies). Next gate **360 vs 340**. See `colab/README.md` and `TRAINING_CHANGELOG.md`.
 
 | Key | Value |
 |-----|-------|
@@ -84,7 +84,7 @@ Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T
 | `replay_buffer` / `replay_window` | 200k |
 | `gate_games` / `gate_sims` | 128 / **100** (gates stay 100) |
 | `gate_exploration_moves` / `gate_openings` | 0 / masters (64×2 colors) |
-| `lr` / `lr_min` | 2.0e-4 flat |
+| `lr` / `lr_min` | **1.5e-4** flat |
 | Training span | auto-stops at iters 260, 280, … (multiples of 20) |
 | `RESET_OPTIMIZER` | `False` |
 
