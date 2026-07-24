@@ -48,6 +48,23 @@ def _prefer_native_selfplay() -> bool:
     return native is not None and hasattr(native, "GameActorBatch")
 
 
+def _color_from_native(value: int) -> chess.Color:
+    """Convert native WHITE=0 / BLACK=1 to python-chess booleans."""
+    if value == 0:
+        return chess.WHITE
+    if value == 1:
+        return chess.BLACK
+    raise ValueError(f"invalid native color: {value}")
+
+
+def _native_match_actors_ready() -> bool:
+    """True when the loaded extension supports dual-net native match actors."""
+    if not _prefer_native_selfplay():
+        return False
+    native = _load_native()
+    return hasattr(native.GameActorBatch, "pending_net_ids")
+
+
 def _mcts_cfg_dict(cfg: Config) -> dict[str, Any]:
     return {
         "simulations": cfg.mcts.simulations,
@@ -526,7 +543,7 @@ def play_games_batched_native_actors(
                 Sample(
                     np.asarray(raw["planes"][row], dtype=np.float16),
                     np.asarray(raw["policies"][row], dtype=np.float16),
-                    chess.Color(bool(raw["players"][row])),
+                    _color_from_native(int(raw["players"][row])),
                     float(raw["values"][row]),
                     source_iter=source_iter,
                     root_q=float(raw["root_q"][row]),
@@ -537,7 +554,7 @@ def play_games_batched_native_actors(
             game = GameResult(
                 samples=samples,
                 termination=str(meta["termination"]),
-                winner=None if winner_value < 0 else chess.Color(bool(winner_value)),
+                winner=None if winner_value < 0 else _color_from_native(winner_value),
                 moves=list(meta["moves"]),
             )
             completed.append(game)
@@ -1333,6 +1350,160 @@ def _record_match_game(
             stats.losses_w += 1
         else:
             stats.losses_b += 1
+
+
+def _subset_legal_csr(
+    legal_indices: np.ndarray,
+    legal_offsets: np.ndarray,
+    rows: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Extract a CSR subset for the given pending-batch row indices."""
+    chunks: list[np.ndarray] = []
+    offsets = [0]
+    for row in rows:
+        start = int(legal_offsets[int(row)])
+        end = int(legal_offsets[int(row) + 1])
+        chunks.append(np.asarray(legal_indices[start:end], dtype=np.int32))
+        offsets.append(offsets[-1] + end - start)
+    indices = np.concatenate(chunks) if chunks else np.empty(0, dtype=np.int32)
+    return indices, np.asarray(offsets, dtype=np.int32)
+
+
+def _apply_match_eval(
+    batch: Any,
+    eval_a: Any,
+    eval_b: Any,
+    actor_ids: np.ndarray,
+    planes: np.ndarray,
+    net_ids: np.ndarray,
+) -> None:
+    """Route pending actor rows to the net that owns the side to move."""
+    use_legal = hasattr(eval_a, "evaluate_legal") and hasattr(eval_b, "evaluate_legal")
+    if use_legal:
+        legal_indices, legal_offsets = batch.pending_legal_csr()
+        for net_id, evaluator in ((0, eval_a), (1, eval_b)):
+            rows = np.flatnonzero(net_ids == net_id)
+            if rows.size == 0:
+                continue
+            sub_indices, sub_offsets = _subset_legal_csr(
+                np.asarray(legal_indices), np.asarray(legal_offsets), rows
+            )
+            legal_logits, values = evaluator.evaluate_legal(
+                planes[rows], sub_indices, sub_offsets
+            )
+            batch.apply_eval_legal(actor_ids[rows], legal_logits, sub_offsets, values)
+        return
+
+    for net_id, evaluator in ((0, eval_a), (1, eval_b)):
+        rows = np.flatnonzero(net_ids == net_id)
+        if rows.size == 0:
+            continue
+        logits, values = evaluator.evaluate_planes(planes[rows])
+        batch.apply_eval(actor_ids[rows], logits, values)
+
+
+def play_match_batched_native_actors(
+    eval_a: NetEvaluator,
+    eval_b: NetEvaluator,
+    cfg: Config,
+    simulations: int,
+    num_games: int,
+    concurrency: int,
+    *,
+    exploration_moves: int = 0,
+    tablebase: Any | None = None,
+    openings: list[list[str]] | None = None,
+    on_progress: Callable[[int], None] | None = None,
+    base_seed: int | None = None,
+) -> _MatchChunkStats:
+    """Run a dual-net strength match on persistent native game actors."""
+    if num_games <= 0:
+        return _MatchChunkStats()
+    if concurrency <= 0:
+        raise ValueError("concurrency must be >= 1")
+    native = _load_native()
+    if native is None or not hasattr(native, "GameActorBatch"):
+        raise RuntimeError("native GameActorBatch unavailable")
+    if not hasattr(native.GameActorBatch, "pending_net_ids"):
+        raise RuntimeError("native GameActorBatch missing pending_net_ids (rebuild extension)")
+
+    from engine.openings import opening_for_game
+
+    start_moves = [
+        list(opening_for_game(openings, game_idx) or [])
+        for game_idx in range(num_games)
+    ]
+    a_is_white = [(game_idx % 2) == 0 for game_idx in range(num_games)]
+    seed = (
+        int(base_seed)
+        if base_seed is not None
+        else int(np.random.randint(0, 2**31 - 1))
+    )
+    batch = native.GameActorBatch(
+        num_games,
+        _native_actor_config(
+            cfg, simulations, add_noise=False, exploration_moves=exploration_moves
+        ),
+        _mcts_cfg_dict(cfg),
+        seed,
+        start_moves=start_moves,
+        a_is_white=a_is_white,
+    )
+
+    stats = _MatchChunkStats()
+    completed = 0
+    out = np.empty((max(1, concurrency), 20, 8, 8), dtype=np.float32)
+    while completed < num_games:
+        requests = batch.tablebase_requests()
+        if requests:
+            ids = np.asarray(
+                [request["actor_id"] for request in requests], dtype=np.int32
+            )
+            outcomes = np.zeros(len(requests), dtype=np.int32)
+            for row, request in enumerate(requests):
+                if tablebase is None:
+                    continue
+                board = chess.Board(request["fen"])
+                try:
+                    wdl = int(tablebase.probe_wdl(board))
+                except (KeyError, chess.syzygy.MissingTableError):
+                    continue
+                outcomes[row] = 1 if wdl == 2 else 2 if wdl == -2 else 3
+            batch.apply_tablebase(ids, outcomes)
+
+        actor_ids, planes = batch.positions_needing_eval(out)
+        actor_ids = np.asarray(actor_ids)
+        if actor_ids.size:
+            net_ids = np.asarray(batch.pending_net_ids(), dtype=np.int32)
+            _apply_match_eval(batch, eval_a, eval_b, actor_ids, planes, net_ids)
+
+        raw = batch.take_completed()
+        for meta in raw["games"]:
+            actor_id = int(meta["actor_id"])
+            start, end = int(meta["sample_start"]), int(meta["sample_end"])
+            samples = [
+                Sample(
+                    np.asarray(raw["planes"][sample_row], dtype=np.float16),
+                    np.asarray(raw["policies"][sample_row], dtype=np.float16),
+                    _color_from_native(int(raw["players"][sample_row])),
+                    float(raw["values"][sample_row]),
+                    source_iter=0,
+                    root_q=float(raw["root_q"][sample_row]),
+                )
+                for sample_row in range(start, end)
+            ]
+            winner_value = int(meta["winner"])
+            game = GameResult(
+                samples=samples,
+                termination=str(meta["termination"]),
+                winner=None if winner_value < 0 else _color_from_native(winner_value),
+                moves=list(meta["moves"]),
+            )
+            _record_match_game(stats, game, a_is_white[actor_id], actor_id)
+            completed += 1
+            if on_progress is not None:
+                on_progress(completed)
+    return stats
 
 
 def _run_match_games(

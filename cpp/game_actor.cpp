@@ -1,12 +1,14 @@
 #include "game_actor.hpp"
 
 #include "encoding.hpp"
+#include "movegen.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <numeric>
 #include <random>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace immortalite {
 namespace {
@@ -41,23 +43,47 @@ struct GameActorBatch::Actor {
   std::string termination;
   int winner = -1;
   bool completed_taken = false;
+  bool a_is_white = true;
   std::mt19937_64 rng;
 };
 
 GameActorBatch::GameActorBatch(int game_count, const GameActorConfig& actor_cfg,
-                               const MctsConfig& mcts_cfg, std::uint64_t base_seed)
+                               const MctsConfig& mcts_cfg, std::uint64_t base_seed,
+                               const std::vector<std::vector<std::string>>& start_moves,
+                               const std::vector<std::uint8_t>& a_is_white)
     : actor_cfg_(actor_cfg), mcts_cfg_(mcts_cfg) {
   if (game_count < 0) throw std::invalid_argument("game_count must be non-negative");
+  if (!start_moves.empty() && static_cast<int>(start_moves.size()) != game_count) {
+    throw std::invalid_argument("start_moves length must match game_count");
+  }
+  if (!a_is_white.empty() && static_cast<int>(a_is_white.size()) != game_count) {
+    throw std::invalid_argument("a_is_white length must match game_count");
+  }
   if (actor_cfg_.value_target != "outcome" && actor_cfg_.value_target != "root_q") {
     throw std::invalid_argument("value_target must be 'outcome' or 'root_q'");
   }
   mcts_cfg_.claim_draw = actor_cfg_.claim_draw;
   mcts_cfg_.draw_contempt = actor_cfg_.draw_contempt;
+  init_attack_tables();
+  init_zobrist();
   actors_.reserve(static_cast<size_t>(game_count));
   for (int id = 0; id < game_count; ++id) {
     auto actor = std::make_unique<Actor>();
     actor->id = id;
     actor->rng.seed(base_seed + static_cast<std::uint64_t>(id));
+    if (!start_moves.empty()) {
+      const auto& opening = start_moves[static_cast<size_t>(id)];
+      if (!opening.empty()) {
+        if (!actor->board.apply_uci_list(opening)) {
+          throw std::invalid_argument("illegal opening move for actor " + std::to_string(id));
+        }
+        actor->moves = opening;
+        actor->move_count = static_cast<int>(opening.size());
+      }
+    }
+    if (!a_is_white.empty()) {
+      actor->a_is_white = a_is_white[static_cast<size_t>(id)] != 0;
+    }
     actors_.push_back(std::move(actor));
     advance(*actors_.back());
   }
@@ -148,6 +174,17 @@ int GameActorBatch::positions_needing_eval(float* out_planes, int capacity,
   return count;
 }
 
+std::vector<int> GameActorBatch::pending_net_ids() const {
+  std::vector<int> out;
+  out.reserve(last_eval_actor_ids_.size());
+  for (int id : last_eval_actor_ids_) {
+    const Actor& actor = *actors_[static_cast<size_t>(id)];
+    const bool use_a = (actor.board.side_to_move() == WHITE) == actor.a_is_white;
+    out.push_back(use_a ? 0 : 1);
+  }
+  return out;
+}
+
 LegalCsr GameActorBatch::pending_legal_csr() const {
   LegalCsr out;
   out.offsets.push_back(0);
@@ -230,26 +267,55 @@ void GameActorBatch::apply_eval(const std::vector<int>& actor_ids, const float* 
   if (n != static_cast<int>(actor_ids.size()) || logits == nullptr || values == nullptr) {
     throw std::invalid_argument("eval batch shape");
   }
+  std::unordered_set<int> seen;
+  for (int id : actor_ids) {
+    if (id < 0 || id >= static_cast<int>(actors_.size())) throw std::invalid_argument("actor id");
+    if (!seen.insert(id).second) throw std::invalid_argument("duplicate actor id");
+    const Actor& actor = *actors_[static_cast<size_t>(id)];
+    if (actor.state != GameActorState::NeedEval || !actor.session ||
+        std::find(last_eval_actor_ids_.begin(), last_eval_actor_ids_.end(), id) ==
+            last_eval_actor_ids_.end()) {
+      throw std::invalid_argument("actor id is not pending evaluation");
+    }
+  }
   for (int row = 0; row < n; ++row) {
     const int id = actor_ids[static_cast<size_t>(row)];
-    if (id < 0 || id >= static_cast<int>(actors_.size())) throw std::invalid_argument("actor id");
     Actor& actor = *actors_[static_cast<size_t>(id)];
-    if (actor.state != GameActorState::NeedEval || !actor.session) continue;
     actor.session->apply_eval(logits + static_cast<size_t>(row) * POLICY_SIZE, values + row, 1);
     if (actor.session->done()) finish_search(actor);
   }
+  std::erase_if(last_eval_actor_ids_, [&](int id) { return seen.contains(id); });
 }
 
 void GameActorBatch::apply_eval_legal(const std::vector<int>& actor_ids, const float* legal_logits,
                                       const int* offsets, const float* values, int n) {
   if (n != static_cast<int>(actor_ids.size()) || legal_logits == nullptr || offsets == nullptr ||
       values == nullptr) throw std::invalid_argument("legal eval batch shape");
+  if (offsets[0] != 0) throw std::invalid_argument("legal offsets must start at zero");
+  std::unordered_set<int> seen;
   for (int row = 0; row < n; ++row) {
-    Actor& actor = *actors_.at(static_cast<size_t>(actor_ids[static_cast<size_t>(row)]));
+    const int id = actor_ids[static_cast<size_t>(row)];
+    if (id < 0 || id >= static_cast<int>(actors_.size())) throw std::invalid_argument("actor id");
+    if (!seen.insert(id).second) throw std::invalid_argument("duplicate actor id");
+    const Actor& actor = *actors_[static_cast<size_t>(id)];
+    if (actor.state != GameActorState::NeedEval || !actor.session ||
+        std::find(last_eval_actor_ids_.begin(), last_eval_actor_ids_.end(), id) ==
+            last_eval_actor_ids_.end()) {
+      throw std::invalid_argument("actor id is not pending evaluation");
+    }
+    const int start = offsets[row], end = offsets[row + 1];
+    if (start < 0 || end < start ||
+        end - start != static_cast<int>(actor.session->pending_legal_indices().size())) {
+      throw std::invalid_argument("legal offsets do not match pending legal moves");
+    }
+  }
+  for (int row = 0; row < n; ++row) {
+    Actor& actor = *actors_[static_cast<size_t>(actor_ids[static_cast<size_t>(row)])];
     const int start = offsets[row], end = offsets[row + 1];
     actor.session->apply_eval_legal(legal_logits + start, end - start, values[row]);
     if (actor.session->done()) finish_search(actor);
   }
+  std::erase_if(last_eval_actor_ids_, [&](int id) { return seen.contains(id); });
 }
 
 void GameActorBatch::complete(Actor& actor) {
@@ -284,7 +350,7 @@ std::vector<CompletedGame> GameActorBatch::take_completed() {
   std::vector<CompletedGame> out;
   for (auto& actor : actors_) {
     if (actor->state != GameActorState::Completed || actor->completed_taken) continue;
-    out.push_back({std::move(actor->samples), actor->termination, actor->winner, actor->moves});
+    out.push_back({actor->id, std::move(actor->samples), actor->termination, actor->winner, actor->moves});
     actor->completed_taken = true;
   }
   return out;

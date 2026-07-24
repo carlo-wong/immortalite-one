@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "mcts.hpp"
 
@@ -50,6 +50,7 @@ struct GameActorSample {
 };
 
 struct CompletedGame {
+  int actor_id = -1;
   std::vector<GameActorSample> samples;
   std::string termination;
   int winner = -1;
@@ -59,13 +60,16 @@ struct CompletedGame {
 class GameActorBatch {
  public:
   GameActorBatch(int game_count, const GameActorConfig& actor_cfg, const MctsConfig& mcts_cfg,
-                 std::uint64_t base_seed);
+                 std::uint64_t base_seed,
+                 const std::vector<std::vector<std::string>>& start_moves = {},
+                 const std::vector<std::uint8_t>& a_is_white = {});
   ~GameActorBatch();
 
   std::vector<TablebaseRequest> tablebase_requests() const;
   void apply_tablebase(const std::vector<int>& actor_ids,
                        const std::vector<TablebaseOutcome>& outcomes);
   int positions_needing_eval(float* out_planes, int capacity, std::vector<int>& actor_ids);
+  std::vector<int> pending_net_ids() const;
   LegalCsr pending_legal_csr() const;
   void apply_eval(const std::vector<int>& actor_ids, const float* logits, const float* values,
                   int n);

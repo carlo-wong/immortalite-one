@@ -51,7 +51,7 @@ Current recipe: iter **261+** — same as `lightning-ai/run_train.py` except wor
 | `games` | 128 | full GPU batch width (`concurrency` matches) |
 | `train_steps` | 800 | ~6× sample reuse at 128 games |
 | `concurrency` | 128 | batched MCTS eval width (one GPU owner) |
-| `selfplay_workers` / `gate_workers` | **2** / **2** | matches Colab 2 vCPU; self-play central inference keeps one CUDA owner |
+| `selfplay_workers` / `gate_workers` | **2** / **2** | self-play: central inference; gates: native actors ignore `gate_workers` (single CUDA owner + `gate_concurrency`) |
 | `replay_buffer` / `replay_window` | **200k** | ~12 iters at 128 games |
 | `draw_penalty` | 1/3 | football 3-1-0 shaping |
 | `resign` | False | off |

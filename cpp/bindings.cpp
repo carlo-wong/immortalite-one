@@ -9,6 +9,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -48,6 +49,48 @@ immortalite::MctsConfig config_from_dict(const py::dict& d) {
   get_f("draw_contempt", cfg.draw_contempt);
   get_b("claim_draw", cfg.claim_draw);
   return cfg;
+}
+
+std::vector<std::vector<std::string>> start_moves_from_py(py::object obj, int game_count) {
+  std::vector<std::vector<std::string>> out;
+  if (obj.is_none()) return out;
+  const py::sequence seq = obj.cast<py::sequence>();
+  if (static_cast<int>(seq.size()) != game_count) {
+    throw std::invalid_argument("start_moves length must match game_count");
+  }
+  out.reserve(static_cast<size_t>(game_count));
+  for (py::ssize_t i = 0; i < seq.size(); ++i) {
+    const py::sequence moves = seq[i].cast<py::sequence>();
+    std::vector<std::string> row;
+    row.reserve(static_cast<size_t>(moves.size()));
+    for (py::ssize_t j = 0; j < moves.size(); ++j) {
+      row.push_back(moves[j].cast<std::string>());
+    }
+    out.push_back(std::move(row));
+  }
+  return out;
+}
+
+std::vector<std::uint8_t> a_is_white_from_py(py::object obj, int game_count) {
+  std::vector<std::uint8_t> out;
+  if (obj.is_none()) return out;
+  if (py::isinstance<py::array>(obj)) {
+    py::array_t<std::uint8_t, py::array::c_style | py::array::forcecast> arr = obj;
+    if (arr.ndim() != 1 || static_cast<int>(arr.shape(0)) != game_count) {
+      throw std::invalid_argument("a_is_white length must match game_count");
+    }
+    out.assign(arr.data(), arr.data() + game_count);
+    return out;
+  }
+  const py::sequence seq = obj.cast<py::sequence>();
+  if (static_cast<int>(seq.size()) != game_count) {
+    throw std::invalid_argument("a_is_white length must match game_count");
+  }
+  out.reserve(static_cast<size_t>(game_count));
+  for (py::ssize_t i = 0; i < seq.size(); ++i) {
+    out.push_back(seq[i].cast<bool>() ? static_cast<std::uint8_t>(1) : static_cast<std::uint8_t>(0));
+  }
+  return out;
 }
 
 py::array_t<float> fill_planes_fen(const std::string& fen,
@@ -160,7 +203,6 @@ class PyMctsSession {
     }
     int n = static_cast<int>(l.shape(0));
     if (n < 1) return;
-    // Contiguous copies for pointer API
     std::vector<float> lbuf(static_cast<size_t>(n * immortalite::POLICY_SIZE));
     std::vector<float> vbuf(static_cast<size_t>(n));
     for (int i = 0; i < n; ++i) {
@@ -220,9 +262,11 @@ class PyMctsSession {
 class PyGameActorBatch {
  public:
   PyGameActorBatch(int game_count, const py::dict& actor_config, const py::dict& mcts_config,
-                   std::uint64_t base_seed)
+                   std::uint64_t base_seed, py::object start_moves = py::none(),
+                   py::object a_is_white = py::none())
       : batch_(game_count, actor_config_from_dict(actor_config), config_from_dict(mcts_config),
-               base_seed) {}
+               base_seed, start_moves_from_py(start_moves, game_count),
+               a_is_white_from_py(a_is_white, game_count)) {}
 
   py::list tablebase_requests() const {
     py::list out;
@@ -274,6 +318,16 @@ class PyGameActorBatch {
     return py::make_tuple(actor_ids, planes);
   }
 
+  py::array_t<std::int32_t> pending_net_ids() const {
+    const auto net_ids = batch_.pending_net_ids();
+    py::array_t<std::int32_t> out(static_cast<py::ssize_t>(net_ids.size()));
+    if (!net_ids.empty()) {
+      auto* data = out.mutable_data();
+      for (size_t i = 0; i < net_ids.size(); ++i) data[i] = net_ids[i];
+    }
+    return out;
+  }
+
   py::tuple pending_legal_csr() const {
     const auto csr = batch_.pending_legal_csr();
     py::array_t<int> indices(static_cast<py::ssize_t>(csr.indices.size()));
@@ -300,6 +354,10 @@ class PyGameActorBatch {
     if (ids.ndim() != 1 || logits.ndim() != 1 || offsets.ndim() != 1 ||
         values.ndim() != 1 || offsets.shape(0) != ids.shape(0) + 1 || values.shape(0) != ids.shape(0))
       throw std::invalid_argument("invalid legal eval batch shapes");
+    if (offsets.data()[0] != 0 ||
+        offsets.data()[offsets.shape(0) - 1] != static_cast<int>(logits.shape(0))) {
+      throw std::invalid_argument("legal offsets must span legal logits");
+    }
     std::vector<int> actor_ids(ids.data(), ids.data() + ids.shape(0));
     batch_.apply_eval_legal(actor_ids, logits.data(), offsets.data(), values.data(),
                             static_cast<int>(ids.shape(0)));
@@ -323,6 +381,7 @@ class PyGameActorBatch {
     size_t row = 0;
     for (const auto& game : games) {
       py::dict meta;
+      meta["actor_id"] = game.actor_id;
       meta["sample_start"] = row;
       meta["sample_end"] = row + game.samples.size();
       meta["termination"] = game.termination;
@@ -401,13 +460,15 @@ PYBIND11_MODULE(_native, m) {
       .def("result", &PyMctsSession::result);
 
   py::class_<PyGameActorBatch>(m, "GameActorBatch")
-      .def(py::init<int, const py::dict&, const py::dict&, std::uint64_t>(),
+      .def(py::init<int, const py::dict&, const py::dict&, std::uint64_t, py::object, py::object>(),
            py::arg("game_count"), py::arg("actor_config") = py::dict(),
-           py::arg("mcts_config") = py::dict(), py::arg("base_seed") = 0)
+           py::arg("mcts_config") = py::dict(), py::arg("base_seed") = 0,
+           py::arg("start_moves") = py::none(), py::arg("a_is_white") = py::none())
       .def("tablebase_requests", &PyGameActorBatch::tablebase_requests)
       .def("apply_tablebase", &PyGameActorBatch::apply_tablebase)
       .def("positions_needing_eval", &PyGameActorBatch::positions_needing_eval,
            py::arg("out") = py::none())
+      .def("pending_net_ids", &PyGameActorBatch::pending_net_ids)
       .def("pending_legal_csr", &PyGameActorBatch::pending_legal_csr)
       .def("apply_eval", &PyGameActorBatch::apply_eval)
       .def("apply_eval_legal", &PyGameActorBatch::apply_eval_legal)

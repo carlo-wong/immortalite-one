@@ -17,6 +17,10 @@ Immortalite One moves board, encoding, and MCTS into **C++** (`engine._native`).
 
 `engine.train` enables central inference by default when `device` starts with `cuda` and `selfplay_workers > 1`. The training process owns the sole CUDA evaluator; workers run CPU/native search and send inference requests to it. CPU, one-worker, and broker-unavailable runs use direct batching instead—central inference never silently falls back to competing per-worker CUDA contexts.
 
+## Strength gates
+
+Manual SPRT gates (`play_match` / Colab cell 6) use the same native `GameActorBatch` stack as self-play when the extension is built: dual `NetEvaluator` in one process (single CUDA owner), masters openings via per-actor `start_moves`, and `pending_net_ids` for A/B routing. `gate_workers>1` is ignored on this path — set `gate_concurrency` (default 128) instead. Falls back to the legacy dual-worker CUDA path only if native actors are unavailable.
+
 ## Fast paths and fallbacks
 
 - **Legal-only transfer and reusable buffers:** when native APIs and `NetEvaluator.evaluate_legal` are available, only legal policy logits cross device-to-host and pinned buffers are reused.

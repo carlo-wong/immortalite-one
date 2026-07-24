@@ -90,7 +90,7 @@ Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T
 
 ### Gating
 
-In-loop gating is off (`--gate-every 0`). For SPRT matches, use Immortalite Zero’s `lightning-ai/run_gate.py` against shared `.pt` files, or call `engine.train.play_match` from a notebook. Dedicated One gate runners can be ported later.
+In-loop gating is off (`--gate-every 0`). For SPRT matches, call `engine.train.play_match` (or Colab cell 6) — gates use the native actor + dual-evaluator path when `engine._native` is built. Zero's `run_gate.py` still works against shared `.pt` files if needed.
 
 ## Step 3 — Sessions and resuming
 

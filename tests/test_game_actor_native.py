@@ -57,6 +57,7 @@ def test_actor_games_match_native_sessions_without_noise() -> None:
     assert actual.moves == expected.moves
     assert actual.termination == expected.termination
     for got, want in zip(actual.samples, expected.samples):
+        assert got.player == want.player
         np.testing.assert_array_equal(got.planes, want.planes)
         np.testing.assert_allclose(got.policy, want.policy, rtol=0, atol=1e-3)
         assert got.root_q == want.root_q

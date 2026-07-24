@@ -52,9 +52,11 @@ from .selfplay import (
     GameResult,
     Sample,
     SelfplayWorkerPool,
+    _native_match_actors_ready,
     _opening_row,
     play_game_gen,
     play_games_batched,
+    play_match_batched_native_actors,
     play_match_parallel,
 )
 
@@ -597,6 +599,87 @@ def play_match(net_a: ChessNet, net_b: ChessNet, cfg: Config,
         match_cfg.train.selfplay_concurrency = concurrency
 
     gate_bar = tqdm(total=n_games, desc=f"gate ({n_games} games)", unit="game", leave=False)
+
+    # Fast path: native GameActorBatch + dual NetEvaluator in one process (self-play stack).
+    # Avoids per-worker dual CUDA nets. gate_workers>1 is ignored — concurrency packs the GPU.
+    if _native_match_actors_ready():
+        eval_a = NetEvaluator(net_a, device=device)
+        eval_b = NetEvaluator(net_b, device=device)
+
+        def _gate_progress_native(completed: int) -> None:
+            _tqdm_sync_progress(gate_bar, completed)
+            if on_progress is not None:
+                on_progress(completed)
+
+        if workers > 1:
+            print(
+                f"gate: native actor path (single CUDA owner); "
+                f"ignoring workers={workers}, using concurrency="
+                f"{match_cfg.train.selfplay_concurrency}"
+            )
+        merged = play_match_batched_native_actors(
+            eval_a,
+            eval_b,
+            match_cfg,
+            sims,
+            n_games,
+            concurrency=max(1, min(n_games, match_cfg.train.selfplay_concurrency)),
+            exploration_moves=exploration_moves,
+            tablebase=tablebase,
+            openings=openings,
+            on_progress=_gate_progress_native,
+        )
+        _tqdm_sync_progress(gate_bar, n_games)
+        gate_bar.close()
+
+        wins_w = merged.wins_w
+        wins_b = merged.wins_b
+        losses_w = merged.losses_w
+        losses_b = merged.losses_b
+        draws_w = merged.draws_w
+        draws_b = merged.draws_b
+        game_lengths = merged.game_lengths
+        termination_counts = merged.termination_counts
+        score = merged.score
+        games_played = len(game_lengths)
+        winrate = score / games_played if games_played > 0 else float("nan")
+        total_wins = wins_w + wins_b
+        total_losses = losses_w + losses_b
+        total_draws = draws_w + draws_b
+        sprt_lower, sprt_upper = sprt_bounds(sprt_alpha, sprt_beta) if sprt else (float("nan"), float("nan"))
+        current_llr = (
+            sprt_llr(total_wins, total_draws, total_losses, elo0=sprt_elo0, elo1=sprt_elo1)
+            if sprt else float("nan")
+        )
+        current_sprt_decision = (
+            sprt_decision(current_llr, sprt_lower, sprt_upper) if sprt else "continue"
+        )
+        terminations_str = ";".join(f"{k}:{v}" for k, v in sorted(termination_counts.items()))
+        elo, elo_lower, elo_upper, los = sprt_elo(total_wins, total_draws, total_losses)
+        return {
+            "winrate": winrate,
+            "wins_as_white": wins_w,
+            "wins_as_black": wins_b,
+            "losses_as_white": losses_w,
+            "losses_as_black": losses_b,
+            "draws_as_white": draws_w,
+            "draws_as_black": draws_b,
+            "mean_game_len": float(np.mean(game_lengths)) if game_lengths else 0.0,
+            "terminations": terminations_str,
+            "llr": current_llr,
+            "sprt_decision": current_sprt_decision,
+            "sprt_lower": sprt_lower,
+            "sprt_upper": sprt_upper,
+            "elo": elo,
+            "elo_lower": elo_lower,
+            "elo_upper": elo_upper,
+            "los": los,
+            "games_played": games_played,
+            "elo0": sprt_elo0 if sprt else float("nan"),
+            "elo1": sprt_elo1 if sprt else float("nan"),
+            "openings": list(merged.openings or []),
+            "book_lines": len(openings) if openings else None,
+        }
 
     if workers > 1:
         ckpt_dir = match_cfg.train.checkpoint_dir or "."
