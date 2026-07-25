@@ -13,8 +13,6 @@
 namespace immortalite {
 namespace {
 
-constexpr char kStartFen[] = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-
 std::string termination_name(const Outcome& outcome) {
   switch (outcome.termination) {
     case Termination::Checkmate: return "checkmate";
@@ -59,8 +57,12 @@ GameActorBatch::GameActorBatch(int game_count, const GameActorConfig& actor_cfg,
   if (!a_is_white.empty() && static_cast<int>(a_is_white.size()) != game_count) {
     throw std::invalid_argument("a_is_white length must match game_count");
   }
-  if (actor_cfg_.value_target != "outcome" && actor_cfg_.value_target != "root_q") {
-    throw std::invalid_argument("value_target must be 'outcome' or 'root_q'");
+  if (actor_cfg_.value_target != "outcome" && actor_cfg_.value_target != "root_q" &&
+      actor_cfg_.value_target != "q_z") {
+    throw std::invalid_argument("value_target must be 'outcome', 'root_q', or 'q_z'");
+  }
+  if (actor_cfg_.value_q_ratio < 0.0f || actor_cfg_.value_q_ratio > 1.0f) {
+    throw std::invalid_argument("value_q_ratio must be in [0, 1]");
   }
   mcts_cfg_.claim_draw = actor_cfg_.claim_draw;
   mcts_cfg_.draw_contempt = actor_cfg_.draw_contempt;
@@ -109,8 +111,10 @@ void GameActorBatch::advance(Actor& actor) {
     actor.state = GameActorState::NeedTablebase;
     return;
   }
-  actor.session = std::make_unique<MctsSession>(kStartFen, actor_cfg_.simulations, mcts_cfg_,
-                                                actor_cfg_.add_noise, actor.moves);
+  // Copy the live board (with repetition / 50-move history) instead of
+  // replaying start-FEN + full UCI list every ply.
+  actor.session = std::make_unique<MctsSession>(actor.board, actor_cfg_.simulations, mcts_cfg_,
+                                                actor_cfg_.add_noise);
   actor.state = GameActorState::NeedEval;
 }
 
@@ -148,8 +152,8 @@ void GameActorBatch::apply_tablebase(const std::vector<int>& actor_ids,
         complete(actor);
         break;
       case TablebaseOutcome::Unavailable:
-        actor.session = std::make_unique<MctsSession>(kStartFen, actor_cfg_.simulations, mcts_cfg_,
-                                                      actor_cfg_.add_noise, actor.moves);
+        actor.session = std::make_unique<MctsSession>(actor.board, actor_cfg_.simulations, mcts_cfg_,
+                                                      actor_cfg_.add_noise);
         actor.state = GameActorState::NeedEval;
         break;
     }
@@ -322,24 +326,36 @@ void GameActorBatch::complete(Actor& actor) {
   if (actor.state == GameActorState::Completed) return;
   if (actor_cfg_.value_target == "root_q") {
     for (auto& sample : actor.samples) sample.value = sample.root_q;
-  } else if (actor.termination == "max_moves" && !actor.samples.empty()) {
-    const Color last = actor.samples.back().player;
-    for (auto& sample : actor.samples) sample.value = sample.player == last ? actor.last_root_value : -actor.last_root_value;
   } else {
-    float target = 0.0f;
-    if (actor.termination == "checkmate" || actor.termination == "resign" ||
-        actor.termination == "tablebase_win") {
-      target = 1.0f;
-      if (actor.termination == "checkmate" && actor_cfg_.fast_mate_bonus > 0.0f) {
-        target += actor_cfg_.fast_mate_bonus / std::max(1, actor.move_count);
-      }
-      for (auto& sample : actor.samples) sample.value = sample.player == actor.winner ? target : -target;
+    // Outcome z (also the Z side of soft Q+Z).
+    if (actor.termination == "max_moves" && !actor.samples.empty()) {
+      const Color last = actor.samples.back().player;
+      for (auto& sample : actor.samples)
+        sample.value = sample.player == last ? actor.last_root_value : -actor.last_root_value;
     } else {
-      if (actor.termination == "stalemate" || actor.termination == "insufficient_material" ||
-          actor.termination == "fifty_moves" || actor.termination == "seventyfive_moves" ||
-          actor.termination == "threefold_repetition" || actor.termination == "fivefold_repetition" ||
-          actor.termination == "tablebase_draw") target = -actor_cfg_.draw_penalty;
-      for (auto& sample : actor.samples) sample.value = target;
+      float target = 0.0f;
+      if (actor.termination == "checkmate" || actor.termination == "resign" ||
+          actor.termination == "tablebase_win") {
+        target = 1.0f;
+        if (actor.termination == "checkmate" && actor_cfg_.fast_mate_bonus > 0.0f) {
+          target += actor_cfg_.fast_mate_bonus / std::max(1, actor.move_count);
+        }
+        for (auto& sample : actor.samples)
+          sample.value = sample.player == actor.winner ? target : -target;
+      } else {
+        if (actor.termination == "stalemate" || actor.termination == "insufficient_material" ||
+            actor.termination == "fifty_moves" || actor.termination == "seventyfive_moves" ||
+            actor.termination == "threefold_repetition" || actor.termination == "fivefold_repetition" ||
+            actor.termination == "tablebase_draw")
+          target = -actor_cfg_.draw_penalty;
+        for (auto& sample : actor.samples) sample.value = target;
+      }
+    }
+    if (actor_cfg_.value_target == "q_z") {
+      const float alpha = actor_cfg_.value_q_ratio;
+      for (auto& sample : actor.samples) {
+        sample.value = alpha * sample.root_q + (1.0f - alpha) * sample.value;
+      }
     }
   }
   actor.session.reset();

@@ -47,7 +47,7 @@ Current recipe: iter **361+** — same as `lightning-ai/run_train.py` except wor
 |-----|-------|-------|
 | `sims` | **150** | flat MCTS sims/move |
 | `move_temperature` / `move_temperature_plies` | **4.0** / **10** | early-ply sampling only; targets untempered |
-| `value_target` | **root_q** | per-ply MCTS root Q labels |
+| `value_target` / `value_q_ratio` | **q_z** / **0.5** | soft Q+Z blend labels |
 | `games` | 128 | full GPU batch width (`concurrency` matches) |
 | `train_steps` | 800 | ~6× sample reuse at 128 games |
 | `concurrency` | 128 | batched MCTS eval width (one GPU owner) |
@@ -120,7 +120,7 @@ python -m engine.inspect_encoding --checkpoint-dir checkpoints
 python -m uci.uci_engine checkpoints/latest.pt
 ```
 
-Legacy Zero checkpoints lack `value_target` metadata: resume with `--value-target root_q` (cell 5 already passes it).
+Legacy Zero checkpoints lack `value_target` metadata: resume with `--value-target q_z` (cell 5 already passes it).
 
 ---
 

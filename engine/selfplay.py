@@ -128,7 +128,7 @@ class Sample:
     player: chess.Color
     value: float = 0.0      # filled in once the game finishes
     source_iter: int = 0
-    root_q: float = 0.0     # STM-POV searched_root_q at this ply (for value_target=root_q)
+    root_q: float = 0.0     # STM-POV searched_root_q (value_target root_q / q_z)
 
 
 @dataclass
@@ -465,6 +465,7 @@ def _native_actor_config(cfg: Config, simulations: int, add_noise: bool,
         "draw_contempt": cfg.mcts.draw_contempt,
         "draw_penalty": cfg.train.draw_penalty,
         "value_target": cfg.train.value_target,
+        "value_q_ratio": cfg.train.value_q_ratio,
         "resign_threshold": cfg.train.resign_threshold,
         "resign_plies": cfg.train.resign_plies,
         "resign_min_moves": cfg.train.resign_min_moves,
@@ -949,6 +950,7 @@ def _config_to_dict(cfg: Config) -> dict:
             "tb_max_pieces": cfg.train.tb_max_pieces,
             "draw_penalty": cfg.train.draw_penalty,
             "value_target": cfg.train.value_target,
+            "value_q_ratio": cfg.train.value_q_ratio,
             "resign_threshold": cfg.train.resign_threshold,
             "resign_plies": cfg.train.resign_plies,
             "resign_min_moves": cfg.train.resign_min_moves,
@@ -1789,12 +1791,13 @@ def _assign_values(samples: list[Sample], outcome: chess.Outcome | None,
             s.value = float(s.root_q)
         return
 
-    if cfg.train.value_target != "outcome":
+    if cfg.train.value_target not in ("outcome", "q_z"):
         raise ValueError(
             f"unknown value_target={cfg.train.value_target!r}; "
-            "expected 'outcome' or 'root_q'"
+            "expected 'outcome', 'root_q', or 'q_z'"
         )
 
+    # Terminal (or truncation) z in the same POV rules as classic AZ outcome labels.
     if termination == "max_moves" and samples:
         # Max-move truncation is a cutoff, not a terminal chess result. Bootstrap
         # from the final root value so long games don't collapse to all-zero labels.
@@ -1802,23 +1805,32 @@ def _assign_values(samples: list[Sample], outcome: chess.Outcome | None,
         target = float(truncation_bootstrap)
         for s in samples:
             s.value = target if s.player == final_player else -target
-        return
-
-    winner = winner_override if winner_override is not None else (outcome.winner if outcome is not None else None)
-    if termination in {"checkmate", "resign", "tablebase_win"} and winner is not None:
-        target = 1.0
-        if termination == "checkmate" and cfg.train.fast_mate_bonus > 0.0:
-            target += cfg.train.fast_mate_bonus / max(1, move_count)
-    elif termination in _DRAW_TERMINATION_SET or termination == "tablebase_draw":
-        # Contempt: a small negative target discourages dull draws,
-        # nudging the net toward decisive, imbalanced positions.
-        target = -cfg.train.draw_penalty
     else:
-        # Truncation at max_game_moves is a training cutoff, not a chess draw.
-        target = 0.0
-
-    for s in samples:
+        winner = (
+            winner_override if winner_override is not None
+            else (outcome.winner if outcome is not None else None)
+        )
         if termination in {"checkmate", "resign", "tablebase_win"} and winner is not None:
-            s.value = target if s.player == winner else -target
+            target = 1.0
+            if termination == "checkmate" and cfg.train.fast_mate_bonus > 0.0:
+                target += cfg.train.fast_mate_bonus / max(1, move_count)
+        elif termination in _DRAW_TERMINATION_SET or termination == "tablebase_draw":
+            # Contempt: a small negative target discourages dull draws,
+            # nudging the net toward decisive, imbalanced positions.
+            target = -cfg.train.draw_penalty
         else:
-            s.value = target
+            # Truncation at max_game_moves is a training cutoff, not a chess draw.
+            target = 0.0
+
+        for s in samples:
+            if termination in {"checkmate", "resign", "tablebase_win"} and winner is not None:
+                s.value = target if s.player == winner else -target
+            else:
+                s.value = target
+
+    if cfg.train.value_target == "q_z":
+        alpha = float(cfg.train.value_q_ratio)
+        if not 0.0 <= alpha <= 1.0:
+            raise ValueError(f"value_q_ratio must be in [0, 1], got {alpha}")
+        for s in samples:
+            s.value = alpha * float(s.root_q) + (1.0 - alpha) * float(s.value)

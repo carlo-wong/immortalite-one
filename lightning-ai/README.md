@@ -76,9 +76,11 @@ tail -f ../results/train_and_gate.log
 
 Writes `latest.pt`, `metrics.csv`, shards every iteration to `../results/`. Training survives browser close (~4h studio limit still applies).
 
+After the job finishes (success or failure), scripts call `Studio().stop()` when `SLEEP_STUDIO=True` in `lightning-ai/studio_sleep.py` (default on). That ends GPU billing immediately instead of waiting for idle auto-sleep. Set `SLEEP_STUDIO = False` if you are debugging interactively. Requires `pip install lightning-sdk` once per studio (usually preinstalled).
+
 ### Current `TRAIN` defaults
 
-Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T4 has 4 vCPUs; Colab is 2). Current row: iter **361+** (`sims=150`, LR **1.0e-4** flat, `move_temperature=4` / 10 plies). Next gate **380 vs 360**. See `colab/README.md` and `TRAINING_CHANGELOG.md`.
+Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T4 has 4 vCPUs; Colab is 2). Current row: iter **381+** (`sims=150`, LR **1.0e-4** flat, `value_target=q_z` @ 0.5, `move_temperature=4` / 10 plies). Next gate **400 vs 380**. See `colab/README.md` and `TRAINING_CHANGELOG.md`.
 
 | Key | Value |
 |-----|-------|
@@ -87,7 +89,7 @@ Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T
 | `train_steps` | 800 |
 | `concurrency` | 128 |
 | `selfplay_workers` / `gate_workers` | 4 / 4 |
-| `value_target` | `root_q` |
+| `value_target` / `value_q_ratio` | `q_z` / `0.5` (soft Q+Z) |
 | `move_temperature` / `move_temperature_plies` | **4.0** / **10** (sampling only) |
 | `resign` | off |
 | `replay_buffer` / `replay_window` | 200k |
@@ -129,7 +131,7 @@ python -m engine.inspect_encoding --checkpoint-dir results
 python -m uci.uci_engine results/latest.pt
 ```
 
-Legacy checkpoints that lack `value_target` metadata: resume with an explicit `--value-target root_q` (Lightning’s `run_train.py` already passes it).
+Legacy checkpoints that lack `value_target` metadata: resume with an explicit `--value-target` (Lightning’s `run_train.py` already passes `q_z`). A stamped `root_q` ckpt can cut over to `q_z` via that explicit flag; mismatched shards are skipped.
 
 ---
 

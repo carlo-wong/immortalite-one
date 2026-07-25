@@ -1000,10 +1000,18 @@ def _require_value_target_compat(
             raise ValueError(
                 f"{source} has no value_target metadata; pass --value-target "
                 f"explicitly (expected recipe uses '{expected}') to avoid "
-                f"silently mixing outcome vs root_q labels"
+                f"silently mixing outcome / root_q / q_z labels"
             )
         return
     if found != expected:
+        # Intentional recipe cutover (e.g. root_q -> q_z): allow when the
+        # caller passed --value-target explicitly. Mismatched shards are skipped.
+        if explicit_cli:
+            print(
+                f"warning: {source} value_target '{found}' -> '{expected}' "
+                f"(explicit --value-target; mismatched shards will be skipped)"
+            )
+            return
         raise ValueError(
             f"{source} value_target '{found}' does not match current "
             f"value_target '{expected}'"
@@ -1104,8 +1112,14 @@ def main() -> None:
                         help="self-play ply safety ceiling (default 10000; not a soft target)")
     parser.add_argument("--draw-penalty", type=float, default=None,
                         help="target for draw outcomes (C2 shaping)")
-    parser.add_argument("--value-target", choices=("outcome", "root_q"), default=None,
-                        help="self-play value labels: terminal outcome or per-ply MCTS root Q")
+    parser.add_argument(
+        "--value-target", choices=("outcome", "root_q", "q_z"), default=None,
+        help="self-play value labels: outcome, per-ply MCTS root Q, or soft Q+Z blend",
+    )
+    parser.add_argument(
+        "--value-q-ratio", type=float, default=None,
+        help="weight on root_q when --value-target q_z (1=pure Q, 0=pure Z; default 0.5)",
+    )
     parser.add_argument("--resign-threshold", type=float, default=None,
                         help="enable resignation when root value <= threshold")
     parser.add_argument("--resign-plies", type=int, default=None,
@@ -1245,6 +1259,10 @@ def main() -> None:
         cfg.train.draw_penalty = args.draw_penalty
     if args.value_target is not None:
         cfg.train.value_target = args.value_target
+    if args.value_q_ratio is not None:
+        cfg.train.value_q_ratio = float(args.value_q_ratio)
+    if not 0.0 <= cfg.train.value_q_ratio <= 1.0:
+        raise ValueError("--value-q-ratio must be in [0, 1]")
     if args.resign_threshold is not None:
         cfg.train.resign_threshold = args.resign_threshold
     if args.resign_plies is not None:
@@ -1281,6 +1299,7 @@ def main() -> None:
         f"syzygy_path={cfg.train.syzygy_path or 'off'} "
         f"draw_penalty={cfg.train.draw_penalty:.3f} "
         f"value_target={cfg.train.value_target} "
+        f"value_q_ratio={cfg.train.value_q_ratio:.3f} "
         f"resign_threshold={cfg.train.resign_threshold:.3f} "
         f"resign_plies={cfg.train.resign_plies} "
         f"resign_min_moves={cfg.train.resign_min_moves} "

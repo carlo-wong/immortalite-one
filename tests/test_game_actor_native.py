@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from engine.config import Config
 from engine.encoding import POLICY_SIZE
@@ -83,3 +84,32 @@ def test_actor_root_q_values_match_sample_root_q() -> None:
         add_noise=False, exploration_moves=0,
     )[0]
     assert all(sample.value == sample.root_q for sample in game.samples)
+
+
+def test_actor_q_z_blends_root_q_and_outcome_z() -> None:
+    cfg = _cfg()
+    cfg.train.max_game_moves = 4
+    cfg.train.value_target = "q_z"
+    cfg.train.value_q_ratio = 0.5
+    game = play_games_batched_native_actors(
+        _DeterministicEvaluator(), cfg, simulations=4, num_games=1, concurrency=1,
+        add_noise=False, exploration_moves=0,
+    )[0]
+    assert game.samples
+    # Reconstruct outcome z from the same rules as GameActorBatch::complete.
+    if game.termination == "max_moves":
+        last = game.samples[-1].player
+        bootstrap = game.samples[-1].root_q
+        z_values = [
+            bootstrap if s.player == last else -bootstrap for s in game.samples
+        ]
+    elif game.termination in {"checkmate", "resign", "tablebase_win"} and game.winner is not None:
+        z_values = [
+            1.0 if s.player == game.winner else -1.0 for s in game.samples
+        ]
+    else:
+        z_values = [-cfg.train.draw_penalty] * len(game.samples)
+    alpha = cfg.train.value_q_ratio
+    for sample, z in zip(game.samples, z_values):
+        expected = alpha * sample.root_q + (1.0 - alpha) * z
+        assert sample.value == pytest.approx(expected, abs=1e-5)

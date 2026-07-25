@@ -19,6 +19,7 @@ struct GameActorConfig {
   float draw_contempt = 1.0f / 3.0f;
   float draw_penalty = 1.0f / 3.0f;
   std::string value_target = "outcome";
+  float value_q_ratio = 0.5f;  // weight on root_q when value_target == "q_z"
   float resign_threshold = -1.1f;
   int resign_plies = 0;
   int resign_min_moves = 0;

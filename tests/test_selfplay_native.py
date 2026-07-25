@@ -15,6 +15,7 @@ from engine.selfplay import (
     play_game_gen,
     play_games_batched,
     play_games_batched_native,
+    play_games_batched_native_actors,
 )
 
 
@@ -110,6 +111,49 @@ def test_native_selfplay_matches_python_zero_semantics(monkeypatch) -> None:
         np.testing.assert_allclose(actual.policy, expected.policy, rtol=0, atol=1e-3)
         assert actual.root_q == pytest.approx(expected.root_q, abs=1e-6)
         assert actual.value == pytest.approx(expected.value, abs=1e-6)
+
+
+@pytest.mark.parametrize("value_q_ratio", [0.0, 0.5, 1.0])
+def test_native_q_z_matches_python_assign_values(value_q_ratio: float) -> None:
+    """Actor path (C++ complete) must match Python _assign_values for q_z."""
+    from engine.selfplay import Sample, _assign_values
+
+    cfg = Config()
+    cfg.train.max_game_moves = 6
+    cfg.train.value_target = "q_z"
+    cfg.train.value_q_ratio = value_q_ratio
+    cfg.mcts.dirichlet_epsilon = 0.0
+    game = play_games_batched_native_actors(
+        _DeterministicEvaluator(),
+        cfg,
+        simulations=8,
+        num_games=1,
+        concurrency=1,
+        add_noise=False,
+        exploration_moves=0,
+    )[0]
+    assert game.samples
+    copies = [
+        Sample(
+            planes=s.planes.copy(),
+            policy=s.policy.copy(),
+            player=s.player,
+            root_q=s.root_q,
+        )
+        for s in game.samples
+    ]
+    bootstrap = float(game.samples[-1].root_q) if game.termination == "max_moves" else 0.0
+    _assign_values(
+        copies,
+        outcome=None,
+        termination=game.termination,
+        cfg=cfg,
+        move_count=len(game.moves),
+        winner_override=game.winner,
+        truncation_bootstrap=bootstrap,
+    )
+    for actual, expected in zip(game.samples, copies):
+        assert actual.value == pytest.approx(expected.value, abs=1e-5)
 
 
 def test_opt_in_profile_preserves_native_selfplay_semantics() -> None:

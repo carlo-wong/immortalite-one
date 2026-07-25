@@ -114,6 +114,19 @@ def test_require_value_target_compat_stamped_mismatch() -> None:
         _require_value_target_compat("outcome", "root_q", source="ckpt")
 
 
+def test_require_value_target_compat_explicit_cli_allows_cutover(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _require_value_target_compat(
+        "q_z",
+        "root_q",
+        source="ckpt",
+        explicit_cli=True,
+    )
+    captured = capsys.readouterr()
+    assert "root_q" in captured.out and "q_z" in captured.out
+
+
 def test_require_value_target_compat_legacy_requires_explicit_cli() -> None:
     with pytest.raises(ValueError, match="no value_target metadata"):
         _require_value_target_compat(

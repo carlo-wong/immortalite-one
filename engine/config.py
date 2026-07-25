@@ -69,7 +69,10 @@ class TrainConfig:
     # Value label source for self-play samples:
     #   "outcome" — classic AZ: terminal z (±1 / -draw_penalty) for every ply
     #   "root_q"  — per-ply MCTS searched_root_q (side-to-move POV)
+    #   "q_z"     — soft blend: value_q_ratio·root_q + (1-value_q_ratio)·z
     value_target: str = "outcome"
+    # Weight on root_q when value_target="q_z" (1 = pure Q, 0 = pure Z).
+    value_q_ratio: float = 0.5
     # Optional self-play resignation. Disabled by default.
     resign_threshold: float = -1.1  # enable with value in [-1, 1]
     resign_plies: int = 0            # consecutive plies below threshold before resign

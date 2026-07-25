@@ -173,7 +173,12 @@ def run_gate_match(
 
 
 def main() -> None:
-    run_gate_match(CHECKPOINT_A, CHECKPOINT_B)
+    from studio_sleep import maybe_stop_studio
+
+    try:
+        run_gate_match(CHECKPOINT_A, CHECKPOINT_B)
+    finally:
+        maybe_stop_studio()
 
 
 if __name__ == "__main__":

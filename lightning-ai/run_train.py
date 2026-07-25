@@ -8,6 +8,9 @@ Example (background, survives browser close):
   cd immortalite-zero
   nohup python lightning-ai/run_train.py > ../results/train.log 2>&1 &
   tail -f ../results/train.log
+
+Stops the Lightning Studio afterward when ``SLEEP_STUDIO`` is True
+(see ``studio_sleep.py``).
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
 from paths import ensure_ckpt_dir, resolve_paths, validate_syzygy
+from studio_sleep import SLEEP_STUDIO, maybe_stop_studio
 
 # --- edit training settings here ---
 # CUDA with multiple self-play workers defaults to central inference: this
@@ -39,8 +43,9 @@ TRAIN = {
     "replay_buffer": 200_000,
     "replay_window": 200_000,
     "draw_penalty": 1 / 3,
-    # Per-ply MCTS root Q value labels (option B); gates still use WDL outcomes.
-    "value_target": "root_q",
+    # Soft Q+Z value labels (α·root_q + (1-α)·z); gates still use WDL outcomes.
+    "value_target": "q_z",
+    "value_q_ratio": 0.5,
     "gate_games": 256,
     "gate_workers": 4,
     "gate_concurrency": 256,
@@ -79,79 +84,84 @@ def _training_span(resume_path: str, resume: bool, stop_interval: int) -> tuple[
 
 
 def main() -> None:
-    paths = resolve_paths()
-    ensure_ckpt_dir(paths)
-    rtbw = validate_syzygy(paths.tb_dir)
+    try:
+        paths = resolve_paths()
+        ensure_ckpt_dir(paths)
+        rtbw = validate_syzygy(paths.tb_dir)
 
-    preset = ["--device", "cuda", "--gpu"]
+        preset = ["--device", "cuda", "--gpu"]
 
-    resume_path = os.path.join(paths.ckpt_dir, "latest.pt")
-    resume_args: list[str] = []
-    if TRAIN["resume"]:
-        if os.path.exists(resume_path):
-            resume_args = ["--resume", resume_path]
-        else:
-            print("WARNING: resume=True but no latest.pt — starting at iter 0")
+        resume_path = os.path.join(paths.ckpt_dir, "latest.pt")
+        resume_args: list[str] = []
+        if TRAIN["resume"]:
+            if os.path.exists(resume_path):
+                resume_args = ["--resume", resume_path]
+            else:
+                print("WARNING: resume=True but no latest.pt — starting at iter 0")
 
-    start_iter, end_iter, train_iterations = _training_span(
-        resume_path, TRAIN["resume"], STOP_INTERVAL,
-    )
+        start_iter, end_iter, train_iterations = _training_span(
+            resume_path, TRAIN["resume"], STOP_INTERVAL,
+        )
 
-    resign_args: list[str] = []
-    if TRAIN["resign"]:
-        resign_args = [
-            "--resign-threshold", str(RESIGN_THRESHOLD),
-            "--resign-plies", str(RESIGN_PLIES),
-            "--resign-min-moves", str(RESIGN_MIN_MOVES),
+        resign_args: list[str] = []
+        if TRAIN["resign"]:
+            resign_args = [
+                "--resign-threshold", str(RESIGN_THRESHOLD),
+                "--resign-plies", str(RESIGN_PLIES),
+                "--resign-min-moves", str(RESIGN_MIN_MOVES),
+            ]
+
+        cmd = [
+            sys.executable, "-m", "engine.train",
+            "--iterations", str(train_iterations),
+            *preset,
+            "--games", str(TRAIN["games"]),
+            "--train-steps", str(TRAIN["train_steps"]),
+            "--concurrency", str(TRAIN["concurrency"]),
+            "--selfplay-workers", str(TRAIN["selfplay_workers"]),
+            "--replay-buffer", str(TRAIN["replay_buffer"]),
+            "--replay-window", str(TRAIN["replay_window"]),
+            "--sims", str(TRAIN["sims"]),
+            "--draw-penalty", str(TRAIN["draw_penalty"]),
+            "--value-target", str(TRAIN["value_target"]),
+            "--value-q-ratio", str(TRAIN["value_q_ratio"]),
+            *resign_args,
+            "--syzygy-path", paths.tb_dir,
+            "--save-every", str(TRAIN["save_every"]),
+            "--gate-every", "0",
+            "--quick-eval-games", "0",
+            "--lr", str(TRAIN["lr"]),
+            "--lr-min", str(TRAIN["lr_min"]),
+            "--lr-total-iters", str(TRAIN["lr_total_iters"]),
+            "--lr-warmup-iters", str(TRAIN["lr_warmup_iters"]),
+            "--grad-clip", str(TRAIN["grad_clip"]),
+            "--move-temperature", str(TRAIN["move_temperature"]),
+            "--move-temperature-plies", str(TRAIN["move_temperature_plies"]),
+            "--checkpoint-dir", paths.ckpt_dir,
+            *resume_args,
         ]
+        if RESET_OPTIMIZER:
+            cmd.append("--reset-optimizer")
 
-    cmd = [
-        sys.executable, "-m", "engine.train",
-        "--iterations", str(train_iterations),
-        *preset,
-        "--games", str(TRAIN["games"]),
-        "--train-steps", str(TRAIN["train_steps"]),
-        "--concurrency", str(TRAIN["concurrency"]),
-        "--selfplay-workers", str(TRAIN["selfplay_workers"]),
-        "--replay-buffer", str(TRAIN["replay_buffer"]),
-        "--replay-window", str(TRAIN["replay_window"]),
-        "--sims", str(TRAIN["sims"]),
-        "--draw-penalty", str(TRAIN["draw_penalty"]),
-        "--value-target", str(TRAIN["value_target"]),
-        *resign_args,
-        "--syzygy-path", paths.tb_dir,
-        "--save-every", str(TRAIN["save_every"]),
-        "--gate-every", "0",
-        "--quick-eval-games", "0",
-        "--lr", str(TRAIN["lr"]),
-        "--lr-min", str(TRAIN["lr_min"]),
-        "--lr-total-iters", str(TRAIN["lr_total_iters"]),
-        "--lr-warmup-iters", str(TRAIN["lr_warmup_iters"]),
-        "--grad-clip", str(TRAIN["grad_clip"]),
-        "--move-temperature", str(TRAIN["move_temperature"]),
-        "--move-temperature-plies", str(TRAIN["move_temperature_plies"]),
-        "--checkpoint-dir", paths.ckpt_dir,
-        *resume_args,
-    ]
-    if RESET_OPTIMIZER:
-        cmd.append("--reset-optimizer")
+        print("repo:       ", paths.repo_dir)
+        print("checkpoints:", paths.ckpt_dir)
+        print("syzygy:     ", paths.tb_dir, f"({rtbw} .rtbw)")
+        print("device:     ", torch.cuda.get_device_name(0))
+        if TRAIN["selfplay_workers"] > 1:
+            print("self-play:  central inference auto-enabled (one training-process CUDA owner)")
+        print("TRAIN:      ", TRAIN)
+        print("SLEEP_STUDIO:", SLEEP_STUDIO)
+        print(
+            f"training span: iters {start_iter}..{end_iter} "
+            f"({train_iterations} iterations), stop_interval={STOP_INTERVAL}"
+        )
+        print("command:    ", " ".join(cmd))
+        print()
 
-    print("repo:       ", paths.repo_dir)
-    print("checkpoints:", paths.ckpt_dir)
-    print("syzygy:     ", paths.tb_dir, f"({rtbw} .rtbw)")
-    print("device:     ", torch.cuda.get_device_name(0))
-    if TRAIN["selfplay_workers"] > 1:
-        print("self-play:  central inference auto-enabled (one training-process CUDA owner)")
-    print("TRAIN:      ", TRAIN)
-    print(
-        f"training span: iters {start_iter}..{end_iter} "
-        f"({train_iterations} iterations), stop_interval={STOP_INTERVAL}"
-    )
-    print("command:    ", " ".join(cmd))
-    print()
-
-    os.chdir(paths.repo_dir)
-    subprocess.run(cmd, check=True)
+        os.chdir(paths.repo_dir)
+        subprocess.run(cmd, check=True)
+    finally:
+        maybe_stop_studio()
 
 
 if __name__ == "__main__":

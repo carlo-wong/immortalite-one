@@ -412,6 +412,7 @@ class PyGameActorBatch {
     get_i("simulations", cfg.simulations); get_i("max_game_moves", cfg.max_game_moves);
     get_b("claim_draw", cfg.claim_draw); get_f("draw_contempt", cfg.draw_contempt);
     get_f("draw_penalty", cfg.draw_penalty); if (d.contains("value_target")) cfg.value_target = d["value_target"].cast<std::string>();
+    get_f("value_q_ratio", cfg.value_q_ratio);
     get_f("resign_threshold", cfg.resign_threshold); get_i("resign_plies", cfg.resign_plies);
     get_i("resign_min_moves", cfg.resign_min_moves); get_f("move_temperature", cfg.move_temperature);
     get_i("move_temperature_plies", cfg.move_temperature_plies); get_i("exploration_moves", cfg.exploration_moves);
