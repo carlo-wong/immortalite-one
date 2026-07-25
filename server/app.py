@@ -2,8 +2,9 @@
 
 Run:  python -m uvicorn server.app:app --reload --port 8000
 Optional env vars:
-  IMMORTALITE_ONE_CHECKPOINT  path to a trained .pt checkpoint
-  IMMORTALITE_ONE_DEVICE      cpu | cuda (default: cpu)
+  IMMORTALITE_ZERO_CHECKPOINT  path to a trained .pt checkpoint
+  IMMORTALITE_ZERO_DEVICE      cpu | cuda (default: cpu)
+  (aliases: IMMORTALITE_ONE_CHECKPOINT / IMMORTALITE_ONE_DEVICE)
 """
 
 from __future__ import annotations
@@ -27,8 +28,9 @@ from pydantic import BaseModel
 from engine.analyze import Analyzer
 from engine.config import Config
 from engine.encoding import ENCODING_VERSION
+from engine._env import env_get
 
-app = FastAPI(title="Immortalite One Analysis")
+app = FastAPI(title="Immortalite Zero Analysis")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -41,16 +43,24 @@ _repo_root = pathlib.Path(__file__).resolve().parent.parent
 _default_checkpoint_candidates = (
     _repo_root / "results" / "latest.pt",
     _repo_root / "checkpoints" / "latest.pt",
+    _repo_root / "results" / "immortalite_zero_checkpoints" / "latest.pt",
     _repo_root / "results" / "immortalite_one_checkpoints" / "latest.pt",
 )
 _default_checkpoint = next(
     (str(path) for path in _default_checkpoint_candidates if path.exists()),
     str(_default_checkpoint_candidates[0]),
 )
-_checkpoint = os.environ.get("IMMORTALITE_ONE_CHECKPOINT") or (
+_checkpoint = env_get(
+    "IMMORTALITE_ZERO_CHECKPOINT",
+    "IMMORTALITE_ONE_CHECKPOINT",
+) or (
     _default_checkpoint if os.path.exists(_default_checkpoint) else None
 )
-_device = os.environ.get("IMMORTALITE_ONE_DEVICE", "cpu")
+_device = env_get(
+    "IMMORTALITE_ZERO_DEVICE",
+    "IMMORTALITE_ONE_DEVICE",
+    default="cpu",
+) or "cpu"
 _analyzer = Analyzer(_checkpoint, _cfg, device=_device)
 
 

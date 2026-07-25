@@ -1,8 +1,8 @@
-# Preferred subagents — Immortalite One
+# Preferred subagents — Immortalite Zero
 
-Project specialists under [`.cursor/agents/`](.cursor/agents/), selected from the global library at `~/.cursor/agents-library` (plus the Immortalite Zero set).
+Project specialists under [`.cursor/agents/`](.cursor/agents/), selected from the global library at `~/.cursor/agents-library`.
 
-Immortalite One is a hybrid rewrite: **C++ board/MCTS/encoding** (pybind11) + **Python/PyTorch** training, with compatibility for Immortalite Zero checkpoints (`.pt`), shards (`.npz`), UCI, and Colab/Lightning entrypoints.
+Immortalite Zero is a hybrid engine: **C++ board/MCTS/encoding** (pybind11) + **Python/PyTorch** training, with compatibility for existing checkpoints (`.pt`), shards (`.npz`), UCI, and Colab/Lightning entrypoints.
 
 Invoke with `/agent-name` or via the Task tool (`subagent_type`).
 
@@ -15,7 +15,7 @@ Invoke with `/agent-name` or via the Task tool (`subagent_type`).
 | `reinforcement-learning-engineer` | Self-play loops, policy/value targets, MCTS↔training integration |
 | `ml-engineer` | Training scripts, checkpointing, progressive sims, data generation |
 | `performance-engineer` | Self-play throughput, CPU vs GPU bottlenecks, sim budgets |
-| `test-automator` | Parity suites vs Immortalite Zero (encoding, MCTS, terminals), CI |
+| `test-automator` | Parity suites vs archived pure-Python oracle (encoding, MCTS, terminals), CI |
 | `software-architect` | Hybrid boundary decisions, compatibility contracts, module layout |
 | `fastapi-developer` | Analysis API (`server/app.py`), `/analyze`, static GUI |
 | `data-scientist` | Training curves, self-play metrics, gating/eval stats |
@@ -32,23 +32,23 @@ Built-in Task types (not in this folder): `explore`, `shell`, `bugbot`, `securit
 |----------|------|
 | `C:\Users\user\.cursor\agents-library\` | Global catalog (~350 agents); **source** for copies below |
 | `C:\Users\user\.cursor\agents\` | Global install dir (currently empty) |
-| [`Chess AI/.cursor/agents/`](../Chess%20AI/.cursor/agents/) | Immortalite Zero project set (subset of the library) |
+| [`immortalite-zero-python/.cursor/agents/`](../immortalite-zero-python/.cursor/agents/) | Archived pure-Python project set (optional) |
 | [`.cursor/agents/`](.cursor/agents/) | This project’s installed specialists |
 
 ---
 
-## Planned file map
+## File map
 
 | Area | Paths |
 |------|-------|
 | C++ core | `cpp/` (board, movegen, encoding, MCTS, pybind bindings) |
-| Python ML / train | `engine/` or `python/immortalite_one/` (`network.py`, `train.py`, `selfplay.py`, …) |
+| Python ML / train | `engine/` (`network.py`, `train.py`, `selfplay.py`, …) |
 | Native extension | pybind11 module via CMake / scikit-build-core |
 | Cloud training | `colab/train.ipynb`, `lightning-ai/` |
 | UCI | `uci/uci_engine.py` |
 | Analysis API | `server/app.py` — `/analyze`, `/health`, `/explorer`; GUI at `/app/` |
 | Web GUI | `web/index.html`, `web/chess.js` |
-| Tests / parity | `tests/` (encoding + MCTS vs Immortalite Zero oracle) |
+| Tests / parity | `tests/` (encoding + MCTS vs archived pure-Python oracle) |
 | Compat artifacts | `.pt` checkpoints, `samples_iter_*.npz`, `ENCODING_VERSION = 2` |
 
-Oracle / reference (read-only): sibling Immortalite Zero repo at `../Chess AI`.
+Oracle / reference (read-only, optional): sibling archived repo at `../immortalite-zero-python` (legacy folder name: `Chess AI`).

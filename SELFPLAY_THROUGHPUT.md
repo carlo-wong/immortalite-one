@@ -1,8 +1,8 @@
-# Self-play throughput notes (Immortalite One)
+# Self-play throughput notes (Immortalite Zero)
 
 Goal: **fastest games/hour on one GPU** without changing search quality (sims/move, net, or MCTS semantics).
 
-Immortalite One moves board, encoding, and MCTS into **C++** (`engine._native`). Cloud self-play uses one CUDA owner for multi-worker training, while workers perform CPU/native search.
+Immortalite Zero moves board, encoding, and MCTS into **C++** (`engine._native`). Cloud self-play uses one CUDA owner for multi-worker training, while workers perform CPU/native search.
 
 ## Recommended defaults (current cloud recipe)
 
@@ -26,7 +26,7 @@ Manual SPRT gates (`play_match` / Colab cell 6) use the same native `GameActorBa
 - **Legal-only transfer and reusable buffers:** when native APIs and `NetEvaluator.evaluate_legal` are available, only legal policy logits cross device-to-host and pinned buffers are reused.
 - **Native actors:** `GameActorBatch` is selected automatically when available through `play_games_batched_native_actors`.
 - **CUDA Graphs:** `NetEvaluator` / `CudaBatchExecutor` use `graph_mode="auto"`; unsupported or failed batch buckets run eagerly without changing search semantics.
-- **Python fallback:** `IMMORTALITE_ONE_FORCE_PYTHON=1` is for debugging only, not a production throughput baseline.
+- **Python fallback:** `IMMORTALITE_ZERO_FORCE_PYTHON=1` is for debugging only, not a production throughput baseline.
 
 See `lightning-ai/run_train.py` and `colab/train.ipynb` for the matching `TRAIN` recipes.
 

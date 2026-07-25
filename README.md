@@ -1,8 +1,12 @@
-# Immortalite One
+# Immortalite Zero
 
-Hybrid rewrite of Immortalite Zero: **C++ board / movegen / encoding / MCTS** (pybind11) plus **Python / PyTorch** training, UCI, Colab, and Lightning.
+Hybrid **C++ board / movegen / encoding / MCTS** (pybind11) plus **Python / PyTorch** training, UCI, Colab, and Lightning.
 
-Compatible with Immortalite Zero `.pt` checkpoints, `samples_iter_*.npz` shards, and `ENCODING_VERSION = 2`.
+Compatible with existing `.pt` checkpoints, `samples_iter_*.npz` shards, and `ENCODING_VERSION = 2`.
+
+The previous pure-Python implementation is archived as
+[`immortalite-zero-python`](https://github.com/carlo-wong/immortalite-zero-python)
+(optional parity oracle).
 
 ## Layout
 
@@ -15,10 +19,10 @@ Compatible with Immortalite Zero `.pt` checkpoints, `samples_iter_*.npz` shards,
 | `web/` | Localhost analysis GUI (`/app/`) |
 | `colab/` | Colab notebook (Drive checkpoints + native build) |
 | `lightning-ai/` | Lightning AI `run_train.py` |
-| `tests/` | Encoding / MCTS parity vs Python oracle |
+| `tests/` | Encoding / MCTS parity (optional cross-repo oracle) |
 | `docs/BUILD.md` | Editable install, Colab, prebuilt wheels |
 | `SELFPLAY_THROUGHPUT.md` | Games/concurrency/worker guidance |
-| `../Chess AI` | Immortalite Zero — read-only oracle |
+| `../immortalite-zero-python` | Archived pure-Python oracle (optional) |
 
 ## Native extension (required)
 
@@ -61,13 +65,13 @@ python -m engine.train --iterations 1 --device cpu --light \
   --checkpoint-dir checkpoints_smoke
 ```
 
-Self-play uses native `MctsSession` + batched `evaluate_planes` when `engine._native` is available. Force Python MCTS with `IMMORTALITE_ONE_FORCE_PYTHON=1`.
+Self-play uses native `MctsSession` + batched `evaluate_planes` when `engine._native` is available. Force Python MCTS with `IMMORTALITE_ZERO_FORCE_PYTHON=1` (alias: `IMMORTALITE_ONE_FORCE_PYTHON`).
 
-The analysis server auto-discovers `results/latest.pt`, then `checkpoints/latest.pt`, unless `IMMORTALITE_ONE_CHECKPOINT` is set. Optional: `IMMORTALITE_ONE_DEVICE=cuda`.
+The analysis server auto-discovers `results/latest.pt`, then `checkpoints/latest.pt`, unless `IMMORTALITE_ZERO_CHECKPOINT` is set (alias: `IMMORTALITE_ONE_CHECKPOINT`). Optional: `IMMORTALITE_ZERO_DEVICE=cuda`.
 
 ```bash
 # Windows (PowerShell)
-$env:IMMORTALITE_ONE_CHECKPOINT="results\latest.pt"
+$env:IMMORTALITE_ZERO_CHECKPOINT="results\latest.pt"
 python -m uvicorn server.app:app --port 8000
 ```
 
@@ -85,7 +89,7 @@ With a small CPU `ChessNet`, forward cost dominates (~100 ms/search); on GPU sel
 ## Cloud
 
 - **Lightning:** `python lightning-ai/run_train.py` (sibling `../results`, `../syzygy345`) — see [lightning-ai/README.md](lightning-ai/README.md)
-- **Colab:** [colab/train.ipynb](colab/train.ipynb) — `pip install -e . --no-deps`, Drive `immortalite_one_checkpoints`
+- **Colab:** [colab/train.ipynb](colab/train.ipynb) — `pip install -e . --no-deps`, Drive `immortalite_zero_checkpoints`
 
 Throughput knobs: [SELFPLAY_THROUGHPUT.md](SELFPLAY_THROUGHPUT.md).
 
@@ -95,6 +99,4 @@ GitHub Actions [`.github/workflows/ci.yml`](.github/workflows/ci.yml) builds the
 
 ## Status
 
-- Phase 1: C++ core, parity tests, UCI/analyze
-- Phase 2: self-play, train, shards, Colab/Lightning entrypoints
-- Phase 3: CI, wheel workflow, build/throughput docs, MCTS microbench
+Hybrid rewrite of the archived pure-Python Immortalite Zero: C++ core, parity tests, self-play/train, Colab/Lightning entrypoints, CI, and wheel workflow.

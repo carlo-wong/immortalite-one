@@ -1,6 +1,6 @@
-# Training Immortalite One on Lightning AI
+# Training Immortalite Zero on Lightning AI
 
-Self-play on a Lightning AI Studio GPU via `run_train.py`, `run_gate.py`, and `run_train_and_gate.py`. During migration, only the repository changes: Immortalite One deliberately reuses Zero's existing sibling `results/` and `syzygy345/` folders.
+Self-play on a Lightning AI Studio GPU via `run_train.py`, `run_gate.py`, and `run_train_and_gate.py`. Sibling `results/` and `syzygy345/` folders are reused across sessions.
 
 ---
 
@@ -8,19 +8,19 @@ Self-play on a Lightning AI Studio GPU via `run_train.py`, `run_gate.py`, and `r
 
 ```
 parent/
-├── immortalite-zero/       # previous repo; may remain alongside One
-├── immortalite-one/        # git clone
+├── immortalite-zero/       # git clone (canonical hybrid product)
 │   └── lightning-ai/
 │       ├── run_train.py
 │       ├── run_gate.py
 │       ├── run_train_and_gate.py
 │       └── paths.py
-├── results/                # existing Zero checkpoints/shards; reused directly
+├── immortalite-zero-python/  # optional archived pure-Python oracle
+├── results/                # checkpoints/shards; reused directly
 │   ├── latest.pt
 │   ├── metrics.csv
 │   ├── metrics_gates.csv
 │   └── ckpt_iter_XXXX.pt
-└── syzygy345/              # existing Zero tablebases; reused directly
+└── syzygy345/              # tablebases; reused directly
 ```
 
 Build Syzygy locally once:
@@ -34,7 +34,7 @@ python scripts/download_syzygy345.py --out syzygy345
 ## Before you start
 
 - Lightning AI account with GPU studio.
-- Keep the existing Zero `results/` and `syzygy345/` as **siblings** of the new One repo; do not rename or copy them.
+- Keep `results/` and `syzygy345/` as **siblings** of the repo; do not rename or copy them.
 - Push engine changes to GitHub; `git pull` before `run_train.py`.
 - **Native extension required:** build `engine._native` once per studio with `pip install -e . --no-deps` (see Step 1). Do **not** `pip install -r requirements.txt` on Lightning — that can replace the studio CUDA torch.
 
@@ -42,10 +42,10 @@ python scripts/download_syzygy345.py --out syzygy345
 
 ## Step 1 — Studio setup (copy-paste)
 
-One requires a compiled C++ extension (`engine._native`). Running `python lightning-ai/run_train*.py` alone is not enough until this succeeds. Re-run after a fresh studio, env wipe, or C++ changes after `git pull`.
+A compiled C++ extension (`engine._native`) is required. Running `python lightning-ai/run_train*.py` alone is not enough until this succeeds. Re-run after a fresh studio, env wipe, or C++ changes after `git pull`.
 
 ```bash
-cd /teamspace/studios/this_studio/immortalite-one
+cd /teamspace/studios/this_studio/immortalite-zero
 sudo apt-get install -y build-essential ninja-build python3-dev
 pip install -q "cmake>=3.26,<4.0" ninja pybind11 scikit-build-core
 pip install -q python-chess numpy tqdm
@@ -62,7 +62,7 @@ If import fails with a “circular import” message for `_native`, the extensio
 Edit `TRAIN` in `lightning-ai/run_train.py` if needed, then:
 
 ```bash
-cd immortalite-one
+cd immortalite-zero
 nohup python lightning-ai/run_train.py > ../results/train.log 2>&1 &
 tail -f ../results/train.log
 ```
@@ -129,7 +129,7 @@ python -m engine.inspect_encoding --checkpoint-dir results
 python -m uci.uci_engine results/latest.pt
 ```
 
-Legacy Zero checkpoints lack `value_target` metadata: resume with an explicit `--value-target root_q` (Lightning’s `run_train.py` already passes it).
+Legacy checkpoints that lack `value_target` metadata: resume with an explicit `--value-target root_q` (Lightning’s `run_train.py` already passes it).
 
 ---
 

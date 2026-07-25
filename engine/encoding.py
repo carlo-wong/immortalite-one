@@ -13,10 +13,10 @@ Move encoding: the AlphaZero 8x8x73 = 4672 scheme.
     56..63 knight moves
     64..72 underpromotions: 3 file-directions x {knight, bishop, rook}
 
-Phase 1 keeps a full python-chess reference implementation identical to
-Immortalite Zero for NetEvaluator, evaluate paths, and parity oracles.
+Phase 1 keeps a full python-chess reference implementation for NetEvaluator,
+evaluate paths, and parity oracles (matches the archived pure-Python Zero).
 Production MCTS encoding uses the native extension when available
-(``engine._native`` / ``immortalite_one._native``); see native wrappers below.
+(``engine._native`` / ``immortalite_zero._native``); see native wrappers below.
 """
 
 from __future__ import annotations
@@ -45,7 +45,11 @@ _UNDERPROMO_INDEX = {p: i for i, p in enumerate(_UNDERPROMO_PIECES)}
 
 
 def _load_native() -> Any | None:
-    for mod_name in ("engine._native", "immortalite_one._native"):
+    for mod_name in (
+        "engine._native",
+        "immortalite_zero._native",
+        "immortalite_one._native",
+    ):
         try:
             return importlib.import_module(mod_name)
         except ImportError:

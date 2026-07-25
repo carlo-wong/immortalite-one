@@ -97,7 +97,7 @@ def test_native_selfplay_matches_python_zero_semantics(monkeypatch) -> None:
         exploration_moves=0,
     )[0]
 
-    monkeypatch.setenv("IMMORTALITE_ONE_FORCE_PYTHON", "1")
+    monkeypatch.setenv("IMMORTALITE_ZERO_FORCE_PYTHON", "1")
     python = _play_python_deterministic(evaluator, cfg, simulations=16)
 
     assert native.moves == python.moves

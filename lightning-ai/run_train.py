@@ -5,7 +5,7 @@ Runs in the terminal so training continues after you close the browser.
 Reuses Immortalite Zero's sibling folders: ../results and ../syzygy345.
 
 Example (background, survives browser close):
-  cd immortalite-one
+  cd immortalite-zero
   nohup python lightning-ai/run_train.py > ../results/train.log 2>&1 &
   tail -f ../results/train.log
 """

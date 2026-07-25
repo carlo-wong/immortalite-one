@@ -40,9 +40,13 @@ GATE_OPENING_PLIES = 8
 
 def _prefer_native_selfplay() -> bool:
     """True when native game actors are available and Python fallback is not forced."""
-    if os.environ.get("IMMORTALITE_ONE_FORCE_PYTHON", "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }:
+    from ._env import env_flag
+
+    if env_flag(
+        "IMMORTALITE_ZERO_FORCE_PYTHON",
+        "IMMORTALITE_ONE_FORCE_PYTHON",
+        default=False,
+    ):
         return False
     native = _load_native()
     return native is not None and hasattr(native, "GameActorBatch")
@@ -1137,10 +1141,17 @@ class SelfplayWorkerPool:
         self.workers = workers
         self.device = device
         self.inference = inference or InferenceSettings(enabled=False)
+        from ._env import env_get
+
+        central_raw = env_get(
+            "IMMORTALITE_ZERO_CENTRAL_INFERENCE",
+            "IMMORTALITE_ONE_CENTRAL_INFERENCE",
+            default="1",
+        )
         self.centralized = (
             self.inference.enabled
             and device.startswith("cuda")
-            and os.environ.get("IMMORTALITE_ONE_CENTRAL_INFERENCE", "1") != "0"
+            and (central_raw or "1") != "0"
         )
         self._closed = False
         self._ctx = mp.get_context("spawn")

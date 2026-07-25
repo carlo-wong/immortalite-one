@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15...3.29)
-project(immortalite_one LANGUAGES CXX)
+project(immortalite_zero LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -11,7 +11,7 @@ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 CONFIG REQUIRED)
 
-set(IMMORTALITE_ONE_SOURCES
+set(IMMORTALITE_ZERO_SOURCES
     cpp/bindings.cpp
     cpp/board.cpp
     cpp/movegen.cpp
@@ -20,7 +20,7 @@ set(IMMORTALITE_ONE_SOURCES
     cpp/game_actor.cpp
 )
 
-pybind11_add_module(_native MODULE ${IMMORTALITE_ONE_SOURCES})
+pybind11_add_module(_native MODULE ${IMMORTALITE_ZERO_SOURCES})
 
 target_include_directories(_native PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cpp)
 

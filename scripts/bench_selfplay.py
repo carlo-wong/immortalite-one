@@ -133,12 +133,13 @@ def _run(
     from engine.selfplay import _prefer_native_selfplay, play_games_batched_native
 
     if backend == "native":
+        os.environ.pop("IMMORTALITE_ZERO_FORCE_PYTHON", None)
         os.environ.pop("IMMORTALITE_ONE_FORCE_PYTHON", None)
         os.environ["USE_NATIVE"] = "1"
         if not _prefer_native_selfplay():
             raise RuntimeError("native MctsSession unavailable; run `pip install -e .`")
     else:
-        os.environ["IMMORTALITE_ONE_FORCE_PYTHON"] = "1"
+        os.environ["IMMORTALITE_ZERO_FORCE_PYTHON"] = "1"
 
     np.random.seed(seed)
     evaluator.reset()
@@ -250,7 +251,8 @@ def main() -> None:
             f"device={args.device}"
         )
 
-    previous_force = os.environ.get("IMMORTALITE_ONE_FORCE_PYTHON")
+    previous_force = os.environ.get("IMMORTALITE_ZERO_FORCE_PYTHON")
+    previous_force_alias = os.environ.get("IMMORTALITE_ONE_FORCE_PYTHON")
     previous_native = os.environ.get("USE_NATIVE")
     native_rows: list[dict] = []
     python_rows: list[dict] = []
@@ -313,9 +315,13 @@ def main() -> None:
             python_rows.append(python)
     finally:
         if previous_force is None:
+            os.environ.pop("IMMORTALITE_ZERO_FORCE_PYTHON", None)
+        else:
+            os.environ["IMMORTALITE_ZERO_FORCE_PYTHON"] = previous_force
+        if previous_force_alias is None:
             os.environ.pop("IMMORTALITE_ONE_FORCE_PYTHON", None)
         else:
-            os.environ["IMMORTALITE_ONE_FORCE_PYTHON"] = previous_force
+            os.environ["IMMORTALITE_ONE_FORCE_PYTHON"] = previous_force_alias
         if previous_native is None:
             os.environ.pop("USE_NATIVE", None)
         else:

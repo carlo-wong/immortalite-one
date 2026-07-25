@@ -1,4 +1,4 @@
-"""Immortalite One Python package (hybrid C++/Python).
+"""Immortalite Zero Python package (hybrid C++/Python).
 
 The native extension ``engine._native`` is required. Build with::
 
@@ -11,7 +11,7 @@ try:
     from . import _native
 except ImportError as exc:  # pragma: no cover - install/build failure path
     raise ImportError(
-        "Immortalite One requires the native extension `engine._native`, which failed "
+        "Immortalite Zero requires the native extension `engine._native`, which failed "
         "to import. Install a C++ toolchain (MSVC on Windows, g++/clang on Linux) and "
         "run: pip install -e ."
     ) from exc

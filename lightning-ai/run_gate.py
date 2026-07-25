@@ -2,7 +2,7 @@
 """Manual strength gate for Lightning AI (terminal).
 
 Edit CHECKPOINT_A / CHECKPOINT_B below, then run from the terminal:
-  cd immortalite-one
+  cd immortalite-zero
   python lightning-ai/run_gate.py
 
 Or call ``run_gate_match`` from ``run_train_and_gate.py``.

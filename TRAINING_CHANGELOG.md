@@ -1,6 +1,8 @@
 # Training recipe changelog
 
-Compatible with Immortalite Zero checkpoints / shards (`ENCODING_VERSION = 2`). Immortalite One additionally stamps `value_target` on new checkpoints and shards; when resuming a legacy Zero artifact that lacks that field, pass `--value-target` explicitly (Colab/Lightning already pass `root_q`).
+Compatible with Immortalite Zero checkpoints / shards (`ENCODING_VERSION = 2`). New checkpoints and shards stamp `value_target`; when resuming a legacy artifact that lacks that field, pass `--value-target` explicitly (Colab/Lightning already pass `root_q`).
+
+**2026-07-25 cutover:** Immortalite One was renamed to Immortalite Zero (hybrid C++/Python). The pure-Python tree is archived as [`immortalite-zero-python`](https://github.com/carlo-wong/immortalite-zero-python). Colab Drive (`immortalite_zero_checkpoints`) and Lightning sibling `results/` / `syzygy345/` paths are unchanged.
 
 Resume from the listed **start iter** with the `TRAIN` settings below (`colab/train.ipynb` cell 6 or `lightning-ai/run_train.py`). Training-parameter changes were aligned to **every 20 iterations** so each gate compares against a checkpoint trained on the same recipe.
 

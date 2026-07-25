@@ -45,7 +45,7 @@ class UCIEngine:
                 break
 
     def _id(self) -> None:
-        self._send("id name Immortalite One")
+        self._send("id name Immortalite Zero")
         self._send("id author self-play")
         self._send("option name Simulations type spin default 100 min 1 max 100000")
         self._send("option name MultiPV type spin default 1 min 1 max 5")

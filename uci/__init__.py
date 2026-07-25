@@ -1,1 +1,1 @@
-"""UCI front-end for Immortalite One."""
+"""UCI front-end for Immortalite Zero."""

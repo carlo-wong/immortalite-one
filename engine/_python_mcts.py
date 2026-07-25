@@ -1,7 +1,8 @@
-"""Python MCTS fallback (ported from Immortalite Zero).
+"""Python MCTS fallback (ported from the archived pure-Python Immortalite Zero).
 
 Used when the native extension is unavailable or
-``IMMORTALITE_ONE_FORCE_PYTHON=1`` is set. Production search prefers native.
+``IMMORTALITE_ZERO_FORCE_PYTHON=1`` is set (alias: ``IMMORTALITE_ONE_FORCE_PYTHON``).
+Production search prefers native.
 """
 
 from __future__ import annotations

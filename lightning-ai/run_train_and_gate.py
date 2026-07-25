@@ -6,7 +6,7 @@ Combines ``run_train.py`` + ``run_gate.py`` in one terminal job.
 Example (latest at iter 360):
   train iters 361..380, then gate ckpt 380 vs 360.
 
-  cd immortalite-one
+  cd immortalite-zero
   nohup python lightning-ai/run_train_and_gate.py > ../results/train_and_gate.log 2>&1 &
   tail -f ../results/train_and_gate.log
 

@@ -6,9 +6,9 @@ requires = [
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "immortalite-one"
+name = "immortalite-zero"
 version = "0.1.0"
-description = "Immortalite One — hybrid C++/Python AlphaZero-style chess engine"
+description = "Immortalite Zero — hybrid C++/Python AlphaZero-style chess engine"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

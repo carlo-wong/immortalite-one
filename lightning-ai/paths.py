@@ -1,4 +1,4 @@
-"""Reuse Immortalite Zero's Lightning sibling folders (results/, syzygy345/)."""
+"""Resolve Lightning sibling folders (results/, syzygy345/)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ class LightningPaths:
 
 
 def resolve_paths() -> LightningPaths:
-    """Only the repo changes; existing Zero results/ and syzygy345/ stay put."""
+    """Repo is immortalite-zero; existing sibling results/ and syzygy345/ stay put."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     candidate = os.path.abspath(os.path.join(script_dir, ".."))
     if os.path.isdir(os.path.join(candidate, "engine")):
@@ -30,7 +30,7 @@ def resolve_paths() -> LightningPaths:
         else:
             raise RuntimeError(
                 "Could not find repo root (expected engine/ package). "
-                "Run from immortalite-one/ or lightning-ai/."
+                "Run from immortalite-zero/ or lightning-ai/."
             )
 
     parent = os.path.dirname(repo_dir)

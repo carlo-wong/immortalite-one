@@ -1,4 +1,4 @@
-"""Optional cross-repository checks against an actual Immortalite Zero checkout."""
+"""Optional cross-repository checks against the archived pure-Python Zero checkout."""
 
 from __future__ import annotations
 
@@ -23,7 +23,8 @@ from engine.network import ChessNet
 
 ZERO_ROOT = find_zero_root()
 pytestmark = pytest.mark.skipif(
-    ZERO_ROOT is None, reason="Immortalite Zero sibling checkout not found"
+    ZERO_ROOT is None,
+    reason="Archived pure-Python Zero sibling checkout not found",
 )
 
 

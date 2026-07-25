@@ -65,6 +65,7 @@ def main() -> None:
     ev = UniformEvaluator()
 
     # Native
+    os.environ.pop("IMMORTALITE_ZERO_FORCE_PYTHON", None)
     os.environ.pop("IMMORTALITE_ONE_FORCE_PYTHON", None)
     os.environ["USE_NATIVE"] = "1"
     native_mcts = MCTS(ev, cfg)

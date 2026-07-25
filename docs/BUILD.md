@@ -1,4 +1,4 @@
-# Building Immortalite One
+# Building Immortalite Zero
 
 ## Local editable install (developers)
 
@@ -53,7 +53,7 @@ CI workflow [`.github/workflows/wheels.yml`](../.github/workflows/wheels.yml) bu
 Trigger: `workflow_dispatch` or push tag `v*`. Download the artifact and:
 
 ```bash
-pip install immortalite_one-*.whl --no-deps
+pip install immortalite_zero-*.whl --no-deps
 ```
 
 **Not on PyPI yet.** Until wheels are published for your exact Python/ABI:

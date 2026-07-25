@@ -1,4 +1,4 @@
-# Training Immortalite One on Google Colab
+# Training Immortalite Zero on Google Colab
 
 Step-by-step guide for the free Colab GPU workflow. Open `colab/train.ipynb` and run cells in order.
 
@@ -9,7 +9,7 @@ Step-by-step guide for the free Colab GPU workflow. Open `colab/train.ipynb` and
 ## Before you start
 
 - A **Google account** (Colab + Drive).
-- Code on GitHub: `github.com/carlo-wong/immortalite-one` — `git push` after local changes so Colab can `git pull`.
+- Code on GitHub: `github.com/carlo-wong/immortalite-zero` — `git push` after local changes so Colab can `git pull`.
 - **Drive first:** cell 2 mounts Drive so you can verify access before the slow install.
 - **Native extension:** cell 3 installs pinned `cmake>=3.26,<4.0` and runs `pip install -e . --no-deps` so Colab’s CUDA torch is not replaced. Training will not run without `engine._native`. See [docs/BUILD.md](../docs/BUILD.md) for wheels / troubleshooting.
 - **Existing training data:** during migration, the notebook reads and writes `MyDrive/immortalite_zero_checkpoints` directly.
@@ -19,9 +19,9 @@ Step-by-step guide for the free Colab GPU workflow. Open `colab/train.ipynb` and
 
 ## Step 1 — Open the notebook
 
-**https://colab.research.google.com/github/carlo-wong/immortalite-one/blob/main/colab/train.ipynb**
+**https://colab.research.google.com/github/carlo-wong/immortalite-zero/blob/main/colab/train.ipynb**
 
-Or: [colab.research.google.com](https://colab.research.google.com) → **File → Open notebook → GitHub** → `carlo-wong/immortalite-one`.
+Or: [colab.research.google.com](https://colab.research.google.com) → **File → Open notebook → GitHub** → `carlo-wong/immortalite-zero`.
 
 ## Step 2 — Enable GPU
 
@@ -63,7 +63,7 @@ Current recipe: iter **361+** — same as `lightning-ai/run_train.py` except wor
 | `save_every` | 10 | numbered snapshots |
 | `resume` | True | loads `latest.pt` automatically |
 
-**Why gates ignore `gate_workers`:** Immortalite One’s fast gate path loads **two** nets (A and B) on **one** CUDA process and runs many games via `gate_concurrency`. Splitting across workers would either duplicate both nets per worker (VRAM blow-up) or need a dual-net central-inference server (not implemented). Self-play can use multiple workers because it has a **single** net + central inference. To speed gates, raise `gate_concurrency` (now 256), not `gate_workers`.
+**Why gates ignore `gate_workers`:** Immortalite Zero’s fast gate path loads **two** nets (A and B) on **one** CUDA process and runs many games via `gate_concurrency`. Splitting across workers would either duplicate both nets per worker (VRAM blow-up) or need a dual-net central-inference server (not implemented). Self-play can use multiple workers because it has a **single** net + central inference. To speed gates, raise `gate_concurrency` (now 256), not `gate_workers`.
 
 Training auto-stops after completing an iter that is a multiple of **20** (240, 260, …). Re-run cell 5 for the next span. No in-loop auto-gate.
 

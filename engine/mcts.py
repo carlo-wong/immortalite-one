@@ -2,14 +2,14 @@
 
 Environment:
   USE_NATIVE=1 (default) — try ``engine._native`` first.
-  IMMORTALITE_ONE_FORCE_PYTHON=1 — skip native and use the python-chess port.
+  IMMORTALITE_ZERO_FORCE_PYTHON=1 — skip native and use the python-chess port
+  (alias: IMMORTALITE_ONE_FORCE_PYTHON).
 """
 
 from __future__ import annotations
 
 import importlib
 import logging
-import os
 import warnings
 from typing import Any, Generator
 
@@ -18,6 +18,7 @@ import numpy as np
 
 from .config import MCTSConfig
 from .network import NetEvaluator
+from ._env import env_flag
 from ._python_mcts import PythonMCTS, SearchResult, _Node
 
 __all__ = [
@@ -32,9 +33,6 @@ __all__ = [
 _LOG = logging.getLogger(__name__)
 _PYTHON_FALLBACK_WARNED = False
 
-_TRUTHY = frozenset({"1", "true", "yes", "on"})
-_FALSY = frozenset({"0", "false", "no", "off"})
-
 
 def _attr(obj: Any, name: str) -> Any:
     if isinstance(obj, dict):
@@ -42,24 +40,16 @@ def _attr(obj: Any, name: str) -> Any:
     return getattr(obj, name)
 
 
-def _env_flag(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None or raw.strip() == "":
-        return default
-    val = raw.strip().lower()
-    if val in _TRUTHY:
-        return True
-    if val in _FALSY:
-        return False
-    return default
-
-
 def _force_python() -> bool:
-    return _env_flag("IMMORTALITE_ONE_FORCE_PYTHON", False)
+    return env_flag(
+        "IMMORTALITE_ZERO_FORCE_PYTHON",
+        "IMMORTALITE_ONE_FORCE_PYTHON",
+        default=False,
+    )
 
 
 def _use_native() -> bool:
-    return _env_flag("USE_NATIVE", True)
+    return env_flag("USE_NATIVE", default=True)
 
 
 def _load_native() -> Any | None:
@@ -79,9 +69,9 @@ def _warn_python_fallback(reason: str) -> None:
         return
     _PYTHON_FALLBACK_WARNED = True
     msg = (
-        f"Immortalite One: using Python MCTS fallback ({reason}). "
+        f"Immortalite Zero: using Python MCTS fallback ({reason}). "
         "Install the native extension with `pip install -e .` for production search. "
-        "Set IMMORTALITE_ONE_FORCE_PYTHON=1 to silence this during bootstrap."
+        "Set IMMORTALITE_ZERO_FORCE_PYTHON=1 to silence this during bootstrap."
     )
     warnings.warn(msg, RuntimeWarning, stacklevel=3)
     _LOG.warning(msg)
