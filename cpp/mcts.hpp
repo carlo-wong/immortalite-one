@@ -62,6 +62,10 @@ class MctsSession {
   MctsSession(std::string_view fen, int simulations, const MctsConfig& cfg, bool add_noise,
               const std::vector<std::string>& moves_from_fen = {});
 
+  // Prefer this for self-play: copies an already-advanced Position (including
+  // undo/repetition history) so each ply does not replay start-FEN + UCI.
+  MctsSession(const Position& root, int simulations, const MctsConfig& cfg, bool add_noise);
+
   bool done() const { return done_; }
 
   // Returns number of positions needing eval (0 if done or waiting).
@@ -117,6 +121,8 @@ class MctsSession {
   void expand_with_priors(Node& node, const std::vector<std::pair<int, Move>>& mapping,
                           const std::vector<float>& priors);
   void cache_pending_legal_indices(const Position& board);
+  void clear_pending_legal();
+  void begin_search_from_root();
   void add_dirichlet_noise(Node& root);
   std::pair<bool, float> terminal_eval(Node& node, const Position& board);
   float value_from_outcome(const Outcome& outcome, const Position& board) const;
@@ -141,6 +147,9 @@ class MctsSession {
   std::vector<Node*> path_;
   int path_depth_ = 0;
   std::vector<int> pending_legal_indices_;
+  // Full (policy_index, Move) mapping cached with pending_legal_indices_ so
+  // expand does not regenerate legal moves a second time.
+  std::vector<std::pair<int, Move>> pending_legal_mapping_;
   std::unordered_map<int, float> root_clean_priors_;
   MctsResult result_;
   std::uint64_t steps_ = 0;

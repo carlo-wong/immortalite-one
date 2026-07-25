@@ -65,6 +65,26 @@ std::vector<double> MctsResult::improved_policy(const MctsConfig& cfg) const {
   return softmax_d(logits);
 }
 
+void MctsSession::begin_search_from_root() {
+  path_board_ = root_board_;
+  root_turn_ = root_board_.side_to_move();
+  root_ = std::make_unique<Node>();
+  clear_pending_legal();
+
+  auto [term, tval] = terminal_eval(*root_, root_board_);
+  if (term) {
+    root_value_ = tval;
+    collect_result();
+    done_ = true;
+    need_root_eval_ = false;
+    waiting_for_eval_ = false;
+    return;
+  }
+  need_root_eval_ = true;
+  waiting_for_eval_ = true;
+  cache_pending_legal_indices(root_board_);
+}
+
 MctsSession::MctsSession(std::string_view fen, int simulations, const MctsConfig& cfg,
                          bool add_noise, const std::vector<std::string>& moves_from_fen)
     : cfg_(cfg),
@@ -82,22 +102,18 @@ MctsSession::MctsSession(std::string_view fen, int simulations, const MctsConfig
     }
     root_board_.make_move(m);
   }
-  path_board_ = root_board_;
-  root_turn_ = root_board_.side_to_move();
-  root_ = std::make_unique<Node>();
+  begin_search_from_root();
+}
 
-  auto [term, tval] = terminal_eval(*root_, root_board_);
-  if (term) {
-    root_value_ = tval;
-    collect_result();
-    done_ = true;
-    need_root_eval_ = false;
-    waiting_for_eval_ = false;
-    return;
-  }
-  need_root_eval_ = true;
-  waiting_for_eval_ = true;
-  cache_pending_legal_indices(root_board_);
+MctsSession::MctsSession(const Position& root, int simulations, const MctsConfig& cfg,
+                         bool add_noise)
+    : cfg_(cfg),
+      sims_target_(simulations > 0 ? simulations : cfg.simulations),
+      add_noise_(add_noise),
+      root_board_(root) {
+  init_attack_tables();
+  init_zobrist();
+  begin_search_from_root();
 }
 
 std::pair<bool, float> MctsSession::terminal_eval(Node& node, const Position& board) {
@@ -142,7 +158,13 @@ std::pair<int, MctsSession::Node*> MctsSession::select_child(Node& node) const {
 
 void MctsSession::expand_from_eval(Node& node, const Position& board, const float* logits,
                                    float value) {
-  auto mapping = legal_move_indices(board);
+  const std::vector<std::pair<int, Move>>* mapping_ptr = &pending_legal_mapping_;
+  std::vector<std::pair<int, Move>> generated;
+  if (pending_legal_mapping_.empty()) {
+    generated = legal_move_indices(board);
+    mapping_ptr = &generated;
+  }
+  const auto& mapping = *mapping_ptr;
   if (mapping.empty()) {
     (void)value;
     return;
@@ -150,24 +172,33 @@ void MctsSession::expand_from_eval(Node& node, const Position& board, const floa
   ++nodes_expanded_;
   std::vector<int> idxs;
   idxs.reserve(mapping.size());
-  for (auto& [idx, mv] : mapping) idxs.push_back(idx);
+  for (const auto& [idx, mv] : mapping) {
+    (void)mv;
+    idxs.push_back(idx);
+  }
   expand_with_priors(node, mapping, softmax_take(logits, idxs));
 }
 
 void MctsSession::expand_from_legal_eval(Node& node, const Position& board,
                                          const float* legal_logits, float value) {
-  auto mapping = legal_move_indices(board);
+  (void)board;
+  if (pending_legal_mapping_.empty()) {
+    throw std::logic_error("expand_from_legal_eval without cached legal mapping");
+  }
+  const auto& mapping = pending_legal_mapping_;
+  if (mapping.size() != pending_legal_indices_.size()) {
+    throw std::logic_error("pending legal mapping/index size mismatch");
+  }
+  for (size_t i = 0; i < mapping.size(); ++i) {
+    if (mapping[i].first != pending_legal_indices_[i]) {
+      throw std::logic_error("pending legal move indices no longer match leaf");
+    }
+  }
   if (mapping.empty()) {
     (void)value;
     return;
   }
   ++nodes_expanded_;
-  std::vector<int> idxs;
-  idxs.reserve(mapping.size());
-  for (auto& [idx, mv] : mapping) idxs.push_back(idx);
-  if (idxs != pending_legal_indices_) {
-    throw std::logic_error("pending legal move indices no longer match leaf");
-  }
   std::vector<float> priors(legal_logits, legal_logits + mapping.size());
   const float maxv = *std::max_element(priors.begin(), priors.end());
   float sum = 0.0f;
@@ -196,13 +227,18 @@ void MctsSession::expand_with_priors(
 }
 
 void MctsSession::cache_pending_legal_indices(const Position& board) {
-  const auto mapping = legal_move_indices(board);
+  pending_legal_mapping_ = legal_move_indices(board);
   pending_legal_indices_.clear();
-  pending_legal_indices_.reserve(mapping.size());
-  for (const auto& [idx, move] : mapping) {
+  pending_legal_indices_.reserve(pending_legal_mapping_.size());
+  for (const auto& [idx, move] : pending_legal_mapping_) {
     (void)move;
     pending_legal_indices_.push_back(idx);
   }
+}
+
+void MctsSession::clear_pending_legal() {
+  pending_legal_indices_.clear();
+  pending_legal_mapping_.clear();
 }
 
 void MctsSession::add_dirichlet_noise(Node& root) {
@@ -304,7 +340,7 @@ void MctsSession::apply_eval(const float* logits, const float* values, int n) {
   if (need_root_eval_) {
     root_value_ = values[0];
     expand_from_eval(*root_, root_board_, logits, values[0]);
-    pending_legal_indices_.clear();
+    clear_pending_legal();
     root_clean_priors_.clear();
     for (auto& [idx, child] : root_->children) {
       root_clean_priors_[idx] = child->prior;
@@ -321,7 +357,7 @@ void MctsSession::apply_eval(const float* logits, const float* values, int n) {
   Node* leaf = path_.back();
   float value = values[0];
   expand_from_eval(*leaf, path_board_, logits, value);
-  pending_legal_indices_.clear();
+  clear_pending_legal();
   backup(value);
   ++sims_done_;
   waiting_for_eval_ = false;
@@ -344,7 +380,7 @@ void MctsSession::apply_eval_legal(const float* legal_logits, int legal_count, f
   if (need_root_eval_) {
     root_value_ = value;
     expand_from_legal_eval(*root_, root_board_, legal_logits, value);
-    pending_legal_indices_.clear();
+    clear_pending_legal();
     root_clean_priors_.clear();
     for (auto& [idx, child] : root_->children) {
       root_clean_priors_[idx] = child->prior;
@@ -359,7 +395,7 @@ void MctsSession::apply_eval_legal(const float* legal_logits, int legal_count, f
 
   Node* leaf = path_.back();
   expand_from_legal_eval(*leaf, path_board_, legal_logits, value);
-  pending_legal_indices_.clear();
+  clear_pending_legal();
   backup(value);
   ++sims_done_;
   waiting_for_eval_ = false;
