@@ -37,15 +37,15 @@ TRAIN = {
     "sims": 150,  # self-play; iter 261+ (gate stays 100)
     "gate_sims": 100,  # manual gate (run_gate.py / run_train_and_gate.py) only
     "games": 128,
-    "train_steps": 800,
+    "train_steps": 1200,  # capacity after soft Q+Z FAIL (was 800)
     "concurrency": 128,
     "selfplay_workers": 4,  # Lightning T4 vCPUs; CUDA central inference auto-enables
     "replay_buffer": 200_000,
     "replay_window": 200_000,
     "draw_penalty": 1 / 3,
-    # Soft Q+Z value labels (α·root_q + (1-α)·z); gates still use WDL outcomes.
-    "value_target": "q_z",
-    "value_q_ratio": 0.5,
+    # Per-ply MCTS root Q labels (rewind after q_z@0.5 FAIL); gates still use WDL.
+    "value_target": "root_q",
+    "value_q_ratio": 0.5,  # unused when value_target=root_q; kept for CLI compatibility
     "gate_games": 256,
     "gate_workers": 4,
     "gate_concurrency": 256,

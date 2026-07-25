@@ -1,6 +1,6 @@
 # Training recipe changelog
 
-Compatible with Immortalite Zero checkpoints / shards (`ENCODING_VERSION = 2`). New checkpoints and shards stamp `value_target`; when resuming a legacy artifact that lacks that field, pass `--value-target` explicitly (Colab/Lightning already pass `q_z`).
+Compatible with Immortalite Zero checkpoints / shards (`ENCODING_VERSION = 2`). New checkpoints and shards stamp `value_target`; when resuming a legacy artifact that lacks that field, pass `--value-target` explicitly (Colab/Lightning already pass `root_q`).
 
 **2026-07-25 cutover:** Immortalite One was renamed to Immortalite Zero (hybrid C++/Python). The pure-Python tree is archived as [`immortalite-zero-python`](https://github.com/carlo-wong/immortalite-zero-python). Colab Drive (`immortalite_zero_checkpoints`) and Lightning sibling `results/` / `syzygy345/` paths are unchanged.
 
@@ -28,9 +28,10 @@ Gates run every 20 iters vs the checkpoint **20 iters ago**. Edit only the `TRAI
 | **321** | **128** | **800** | **128** | **2**/4 | **200k** | **128 games** (Elo CI), **gate_sims=100** | **2.0e-4 flat** | same as 261; LR step-down 2.5e-4 → 2.0e-4 |
 | **341** | **128** | **800** | **128** | **2**/4 | **200k** | **128 / 256 games** (Elo CI), **gate_sims=100** | **1.5e-4 flat** | same as 321; LR 2.0e-4 → 1.5e-4; gate **360 vs 340** PASS @256 (+45 Elo, LB +6.4) |
 | **361** | **128** | **800** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | same as 341; LR → 1.0e-4; **no ply cap**; gate **380 vs 360** PASS (+67 Elo) |
-| **381** | **128** | **800** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | same as 361; **`value_target=q_z`** (`value_q_ratio=0.5`); next gate **400 vs 380** |
+| **381** | **128** | **800** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | **`value_target=q_z` @0.5** — **reverted** (gate 400 vs 380 FAIL −92 Elo; cold buffer + α shock) |
+| **381**¶ | **128** | **1200** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | rewind `ckpt_iter_0380`; **`root_q`**; **train_steps 800→1200**; next gate **400 vs 380** |
 
-**Current row:** start **381** — soft Q+Z value labels (`0.5·root_q + 0.5·z`), sims stay 150, LR 1e-4. Resume from `latest.pt` with explicit `--value-target q_z` (Lightning/Colab pass it). Do **not** use `--reset-optimizer`. Manual gate after the block: **400 vs 380**.
+**Current row:** start **381** (rewind) — restore **`ckpt_iter_0380.pt` → `latest.pt`**, `value_target=root_q`, **`train_steps=1200`**. Soft Q+Z@0.5 discarded after FAIL. Do **not** use `--reset-optimizer`. Manual gate after the block: **400 vs 380**.
 
 Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net only with a new `--checkpoint-dir`.
 
@@ -154,12 +155,17 @@ Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net o
 - **Gate concurrency 128 → 256** (native dual-net path; `gate_workers` still ignored).
 - Gate **380 vs 360**: PASS (+67 Elo).
 
-### Iter 381 — value_target=q_z (current)
+### Iter 381 — value_target=q_z (reverted)
 
-- Same as 361 except self-play value labels: **`value_target=q_z`** with **`value_q_ratio=0.5`** (`0.5·root_q + 0.5·z`). Soft Q+Z blend to anchor non-stationary pure-Q chase; sims stay 150.
-- Explicit `--value-target q_z` allows resume from a stamped `root_q` ckpt; mismatched `root_q` shards are skipped.
-- Hold sims 150 / gate_sims 100 / T=4 / buffer 200k / games 128 / steps 800 / LR 1e-4 / grad_clip 10.
-- Next manual gate: **400 vs 380**.
-- Lightning: `python lightning-ai/run_train.py` or combined `python lightning-ai/run_train_and_gate.py`.
+- Soft Q+Z (`α=0.5`) + hard skip of stamped `root_q` shards (cold buffer).
+- Gate **400 vs 380**: **FAIL** (−91.6 Elo, CI [−133, −53], 74–42–140). Train curves also aborted (vl late−early, top1 collapse, sign_acc drip). Not a label-path bug — α shock + flush confound.
+
+### Iter 381 — rewind + train_steps 1200 (current)
+
+- Restore **`ckpt_iter_0380.pt`** as `latest.pt`. Resume with **`value_target=root_q`**.
+- **One TRAIN knob:** `train_steps` **800 → 1200**. Hold sims 150 / gate_sims 100 / T=4 / buffer 200k / games 128 / LR 1e-4 / grad_clip 10.
+- Leftover `q_z` shards 381–400 are stamp-skipped; new iters overwrite the same filenames. Do not delete required.
+- Next manual gate: **400 vs 380** (retrain window).
+- Lightning: `cp ../results/ckpt_iter_0380.pt ../results/latest.pt` then `python lightning-ai/run_train_and_gate.py`.
 
 Last updated: 2026-07-25.
