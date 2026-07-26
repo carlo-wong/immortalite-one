@@ -143,7 +143,8 @@ def _load_matching_state_dict(module: torch.nn.Module, state_dict: dict,
 
 def train_step(net: ChessNet, optimizer, batch: list[Sample], device: str,
                scaler: torch.cuda.amp.GradScaler | None = None,
-               grad_clip: float = 10.0) -> dict[str, float]:
+               grad_clip: float = 10.0,
+               value_coef: float = 1.0) -> dict[str, float]:
     use_cuda = device.startswith("cuda")
     with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=use_cuda):
         planes = torch.from_numpy(np.stack([s.planes for s in batch])).to(device).float()
@@ -160,7 +161,7 @@ def train_step(net: ChessNet, optimizer, batch: list[Sample], device: str,
         sigma = 0.75 * bin_width
         target_v_dist = _gaussian_value_targets(target_v, net.value_support, sigma)
         value_loss = -(target_v_dist * value_log_probs).sum(dim=1).mean()
-        loss = policy_loss + value_loss
+        loss = policy_loss + float(value_coef) * value_loss
 
     optimizer.zero_grad()
     if scaler is not None:
@@ -1120,6 +1121,10 @@ def main() -> None:
         "--value-q-ratio", type=float, default=None,
         help="weight on root_q when --value-target q_z (1=pure Q, 0=pure Z; default 0.5)",
     )
+    parser.add_argument(
+        "--value-coef", type=float, default=None,
+        help="multiply value_loss in total loss (default 1.0; e.g. 1.5 up-weights value)",
+    )
     parser.add_argument("--resign-threshold", type=float, default=None,
                         help="enable resignation when root value <= threshold")
     parser.add_argument("--resign-plies", type=int, default=None,
@@ -1263,6 +1268,10 @@ def main() -> None:
         cfg.train.value_q_ratio = float(args.value_q_ratio)
     if not 0.0 <= cfg.train.value_q_ratio <= 1.0:
         raise ValueError("--value-q-ratio must be in [0, 1]")
+    if args.value_coef is not None:
+        cfg.train.value_coef = float(args.value_coef)
+    if cfg.train.value_coef < 0.0:
+        raise ValueError("--value-coef must be >= 0")
     if args.resign_threshold is not None:
         cfg.train.resign_threshold = args.resign_threshold
     if args.resign_plies is not None:
@@ -1300,6 +1309,7 @@ def main() -> None:
         f"draw_penalty={cfg.train.draw_penalty:.3f} "
         f"value_target={cfg.train.value_target} "
         f"value_q_ratio={cfg.train.value_q_ratio:.3f} "
+        f"value_coef={cfg.train.value_coef:.3f} "
         f"resign_threshold={cfg.train.resign_threshold:.3f} "
         f"resign_plies={cfg.train.resign_plies} "
         f"resign_min_moves={cfg.train.resign_min_moves} "
@@ -1514,8 +1524,11 @@ def main() -> None:
                                  desc=f"iter {it} train", unit="step", leave=False)
                 for step in train_bar:
                     batch = random.sample(sample_pool, cfg.train.batch_size)
-                    step_result = train_step(net, optimizer, batch, args.device, scaler=scaler,
-                                             grad_clip=cfg.train.grad_clip_norm)
+                    step_result = train_step(
+                        net, optimizer, batch, args.device, scaler=scaler,
+                        grad_clip=cfg.train.grad_clip_norm,
+                        value_coef=cfg.train.value_coef,
+                    )
                     for name, value in step_result.items():
                         step_metrics.setdefault(name, []).append(value)
                     step_rows.append((int(step), step_result))

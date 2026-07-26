@@ -37,15 +37,17 @@ TRAIN = {
     "sims": 150,  # self-play; iter 261+ (gate stays 100)
     "gate_sims": 100,  # manual gate (run_gate.py / run_train_and_gate.py) only
     "games": 128,
-    "train_steps": 1200,  # capacity after soft Q+Z FAIL (was 800)
+    "train_steps": 800,  # reverted after 1200 null result
     "concurrency": 128,
     "selfplay_workers": 4,  # Lightning T4 vCPUs; CUDA central inference auto-enables
     "replay_buffer": 200_000,
     "replay_window": 200_000,
     "draw_penalty": 1 / 3,
-    # Per-ply MCTS root Q labels (rewind after q_z@0.5 FAIL); gates still use WDL.
+    # Per-ply MCTS root Q labels; gates still use WDL.
     "value_target": "root_q",
     "value_q_ratio": 0.5,  # unused when value_target=root_q; kept for CLI compatibility
+    # loss = policy + value_coef * value (Card 2A after train_steps↑ null).
+    "value_coef": 1.5,
     "gate_games": 256,
     "gate_workers": 4,
     "gate_concurrency": 256,
@@ -125,6 +127,7 @@ def main() -> None:
             "--draw-penalty", str(TRAIN["draw_penalty"]),
             "--value-target", str(TRAIN["value_target"]),
             "--value-q-ratio", str(TRAIN["value_q_ratio"]),
+            "--value-coef", str(TRAIN["value_coef"]),
             *resign_args,
             "--syzygy-path", paths.tb_dir,
             "--save-every", str(TRAIN["save_every"]),

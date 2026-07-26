@@ -958,6 +958,7 @@ def _config_to_dict(cfg: Config) -> dict:
             "sims_per_move": cfg.train.sims_per_move,
             "checkpoint_dir": cfg.train.checkpoint_dir,
             "grad_clip_norm": cfg.train.grad_clip_norm,
+            "value_coef": cfg.train.value_coef,
             "move_temperature": cfg.train.move_temperature,
             "move_temperature_plies": cfg.train.move_temperature_plies,
         },

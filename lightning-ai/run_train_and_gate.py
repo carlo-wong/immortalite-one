@@ -92,6 +92,7 @@ def main() -> None:
             "--draw-penalty", str(TRAIN["draw_penalty"]),
             "--value-target", str(TRAIN["value_target"]),
             "--value-q-ratio", str(TRAIN["value_q_ratio"]),
+            "--value-coef", str(TRAIN["value_coef"]),
             *resign_args,
             "--syzygy-path", paths.tb_dir,
             "--save-every", str(TRAIN["save_every"]),

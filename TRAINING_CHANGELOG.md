@@ -29,9 +29,10 @@ Gates run every 20 iters vs the checkpoint **20 iters ago**. Edit only the `TRAI
 | **341** | **128** | **800** | **128** | **2**/4 | **200k** | **128 / 256 games** (Elo CI), **gate_sims=100** | **1.5e-4 flat** | same as 321; LR 2.0e-4 → 1.5e-4; gate **360 vs 340** PASS @256 (+45 Elo, LB +6.4) |
 | **361** | **128** | **800** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | same as 341; LR → 1.0e-4; **no ply cap**; gate **380 vs 360** PASS (+67 Elo) |
 | **381** | **128** | **800** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | **`value_target=q_z` @0.5** — **reverted** (gate 400 vs 380 FAIL −92 Elo; cold buffer + α shock) |
-| **381**¶ | **128** | **1200** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | rewind `ckpt_iter_0380`; **`root_q`**; **train_steps 800→1200**; next gate **400 vs 380** |
+| **381**¶ | **128** | **1200** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | rewind 380; `root_q`; **train_steps→1200** — **weak** (gate 400 vs 380 INCONCLUSIVE +18 Elo; grads hotter) |
+| **381**‖ | **128** | **800** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | rewind 380; `root_q`; steps **800**; **`value_coef=1.5`**; next gate **400 vs 380** |
 
-**Current row:** start **381** (rewind) — restore **`ckpt_iter_0380.pt` → `latest.pt`**, `value_target=root_q`, **`train_steps=1200`**. Soft Q+Z@0.5 discarded after FAIL. Do **not** use `--reset-optimizer`. Manual gate after the block: **400 vs 380**.
+**Current row:** start **381** (rewind) — restore **`ckpt_iter_0380.pt` → `latest.pt`**, `value_target=root_q`, `train_steps=800`, **`value_coef=1.5`**. Do **not** use `--reset-optimizer`. Manual gate after the block: **400 vs 380**.
 
 Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net only with a new `--checkpoint-dir`.
 
@@ -160,12 +161,16 @@ Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net o
 - Soft Q+Z (`α=0.5`) + hard skip of stamped `root_q` shards (cold buffer).
 - Gate **400 vs 380**: **FAIL** (−91.6 Elo, CI [−133, −53], 74–42–140). Train curves also aborted (vl late−early, top1 collapse, sign_acc drip). Not a label-path bug — α shock + flush confound.
 
-### Iter 381 — rewind + train_steps 1200 (current)
+### Iter 381 — rewind + train_steps 1200 (weak)
 
-- Restore **`ckpt_iter_0380.pt`** as `latest.pt`. Resume with **`value_target=root_q`**.
-- **One TRAIN knob:** `train_steps` **800 → 1200**. Hold sims 150 / gate_sims 100 / T=4 / buffer 200k / games 128 / LR 1e-4 / grad_clip 10.
-- Leftover `q_z` shards 381–400 are stamp-skipped; new iters overwrite the same filenames. Do not delete required.
-- Next manual gate: **400 vs 380** (retrain window).
+- Restore **`ckpt_iter_0380.pt`**; `root_q`; **train_steps 800→1200**.
+- Gate **400 vs 380**: **INCONCLUSIVE** (+18 Elo, CI [−21, +57]). Mild vl cool; **grad_norm worse** (~16). Not kept.
+
+### Iter 381 — rewind + value_coef 1.5 (current)
+
+- Restore **`ckpt_iter_0380.pt`** as `latest.pt`. **`value_target=root_q`**, **`train_steps=800`** (reverted), sims **150**.
+- **One TRAIN knob:** **`value_coef` 1.0 → 1.5** (`loss = policy_loss + 1.5 * value_loss`). Hold LR 1e-4 / grad_clip 10 / T=4 / buffer 200k / games 128.
+- Next manual gate: **400 vs 380**.
 - Lightning: `cp ../results/ckpt_iter_0380.pt ../results/latest.pt` then `python lightning-ai/run_train_and_gate.py`.
 
-Last updated: 2026-07-25.
+Last updated: 2026-07-26.

@@ -80,18 +80,19 @@ After the job finishes (success or failure), scripts call `Studio().stop()` when
 
 ### Current `TRAIN` defaults
 
-Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T4 has 4 vCPUs; Colab is 2). Current row: **rewind to 380**, retrain **381–400** (`sims=150`, LR **1.0e-4** flat, `value_target=root_q`, `train_steps=1200`, `move_temperature=4` / 10 plies). Next gate **400 vs 380**. See `colab/README.md` and `TRAINING_CHANGELOG.md`.
+Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T4 has 4 vCPUs; Colab is 2). Current row: **rewind to 380**, retrain **381–400** (`sims=150`, LR **1.0e-4** flat, `value_target=root_q`, `train_steps=800`, **`value_coef=1.5`**, `move_temperature=4` / 10 plies). Next gate **400 vs 380**. See `colab/README.md` and `TRAINING_CHANGELOG.md`.
 
-**Rewind ops:** `cp ../results/ckpt_iter_0380.pt ../results/latest.pt` before train. Keep failed `q_z` 381–400 shards/ckpts (stamp-skipped); new iters overwrite the same filenames.
+**Rewind ops:** `cp ../results/ckpt_iter_0380.pt ../results/latest.pt` before train. Keep older shards/ckpts (stamp-skipped mismatches); new iters overwrite the same filenames.
 
 | Key | Value |
 |-----|-------|
 | `sims` | **150** (self-play) |
 | `games` | 128 |
-| `train_steps` | **1200** |
+| `train_steps` | **800** (1200 null; reverted) |
 | `concurrency` | 128 |
 | `selfplay_workers` / `gate_workers` | 4 / 4 |
-| `value_target` | `root_q` (q_z@0.5 discarded after gate FAIL) |
+| `value_target` | `root_q` |
+| `value_coef` | **1.5** (loss = π + 1.5·v) |
 | `move_temperature` / `move_temperature_plies` | **4.0** / **10** (sampling only) |
 | `resign` | off |
 | `replay_buffer` / `replay_window` | 200k |
