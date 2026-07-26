@@ -1,0 +1,5 @@
+iter,prev_iter,games,wins,draws,losses,elo,elo_lower,elo_upper,los,verdict,intervention_note,source
+360,340,256,123,43,90,45.04,6.36,84.87,0.988816,PASS,LR 1.5e-4 block end,metrics_gates.csv
+380,360,256,132,41,83,67.33,28.42,107.99,0.999684,PASS,LR 1e-4 / no ply cap — promote baseline,metrics_gates.csv
+400,380,256,74,42,140,-91.64,-133.05,-52.64,0.000001,FAIL,soft Q+Z alpha=0.5 + cold buffer flush,chat_paste_2026-07-25
+400,380,256,114,41,101,17.66,-21.33,57.10,0.812718,INCONCLUSIVE,train_steps 800->1200 rewind from 380,chat_paste_2026-07-26
