@@ -37,8 +37,8 @@ Source of truth for machine gates: `results/metrics_gates.csv` (PASS/historical 
 
 | Lever | Status |
 |--------|--------|
-| `value_coef=1.5`, `root_q`, steps 800, sims 150 | Running (rewind from 380); gate 400 vs 380 pending |
+| `value_coef=1.0`, `root_q`, steps 800, sims 150 | Rewind from 400 after 401–420 INC under coef 1.5; next gate **420 vs 400** |
 
-On PASS, add a row above and append the gate to `metrics_gates.csv`. On FAIL/INC, put the gate row in `tmp/400_vs_380_tries.csv` only.
+On PASS, add a row above and append the gate to `metrics_gates.csv`. On FAIL/INC, keep the gate row out of the promote line (tmp dumps OK).
 
 Last updated: 2026-07-26.

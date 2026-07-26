@@ -46,8 +46,8 @@ TRAIN = {
     # Per-ply MCTS root Q labels; gates still use WDL.
     "value_target": "root_q",
     "value_q_ratio": 0.5,  # unused when value_target=root_q; kept for CLI compatibility
-    # loss = policy + value_coef * value (Card 2A after train_steps↑ null).
-    "value_coef": 1.5,
+    # Equal policy/value weight (1.5 stall at 401–420; rewind 400).
+    "value_coef": 1.0,
     "gate_games": 256,
     "gate_workers": 4,
     "gate_concurrency": 256,
