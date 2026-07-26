@@ -32,9 +32,10 @@ Gates run every 20 iters vs the checkpoint **20 iters ago**. Edit only the `TRAI
 | **381**¶ | **128** | **1200** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | rewind 380; `root_q`; **train_steps→1200** — **weak** (gate 400 vs 380 INCONCLUSIVE +18 Elo; grads hotter) |
 | **381**‖ | **128** | **800** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | rewind 380; `root_q`; steps **800**; **`value_coef=1.5`**; gate **400 vs 380** PASS (+67 Elo); **401–420** INC vs 400 — not kept |
 | **401** | **128** | **800** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | rewind 400; `root_q`; **`value_coef` 1.5→1.0** — INC ~0.51 vs 400; not kept |
-| **401**¶ | **128** | **800** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | rewind 400; **`policy_surprise_data_weight=0.5`** (KataGo write-time KL); `value_coef=1.0`; next gate **420 vs 400** |
+| **401**¶ | **128** | **800** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | rewind 400; **`policy_surprise_data_weight=0.5`** — INC near FAIL (−38 Elo); not kept |
+| **401**‖ | **256** | **1600** | **256** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | rewind 400; surprise **off**; **2× games+steps** (buffer held); next gate **420 vs 400** |
 
-**Current row:** start **401** (rewind) — restore **`ckpt_iter_0400.pt` → `latest.pt`**, `value_target=root_q`, `train_steps=800`, **`value_coef=1.0`**, **`policy_surprise_data_weight=0.5`**. Do **not** use `--reset-optimizer`. Manual gate after the block: **420 vs 400**.
+**Current row:** start **401** (rewind) — restore **`ckpt_iter_0400.pt` → `latest.pt`**, `value_target=root_q`, **`games=256`**, **`train_steps=1600`**, **`concurrency=256`**, buffer **200k**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Manual gate after the block: **420 vs 400**.
 
 Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net only with a new `--checkpoint-dir`.
 
@@ -181,11 +182,18 @@ Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net o
 - **One TRAIN knob:** **`value_coef` 1.5 → 1.0** (equal policy/value weight).
 - Gate **420 vs 400**: **INCONCLUSIVE** (~0.51). Not kept.
 
-### Iter 401 — rewind + policy surprise 0.5 (current)
+### Iter 401 — rewind + policy surprise 0.5 (weak)
 
 - Restore **`ckpt_iter_0400.pt`** as `latest.pt`. Hold `value_coef=1.0` / `root_q` / steps 800 / sims 150.
-- **One TRAIN knob:** **`policy_surprise_data_weight` 0 → 0.5** (KataGo write-time: half uniform, half ∝ `KL(π_target ‖ π_prior)` on legal moves; replicate samples at ingest; gates unchanged).
+- **One TRAIN knob:** **`policy_surprise_data_weight` 0 → 0.5** (KataGo write-time: half uniform, half ∝ `KL(π_target ‖ π_prior)`; replicate at ingest).
+- Train curves looked healthier (pl/vl↓, top1↑; grad_norm ~16–17).
+- Gate **420 vs 400**: **INCONCLUSIVE** near FAIL — **94–40–122**, score **0.445**, **−38 Elo**, CI **[−78, +0.8]**. Worse than prior 420-slot tries. Not kept.
+
+### Iter 401 — rewind + 2× games/steps (current)
+
+- Restore **`ckpt_iter_0400.pt`** as `latest.pt`. Surprise **off**. Hold `value_coef=1.0` / `root_q` / sims 150 / LR 1e-4 / buffer **200k**.
+- **One scale package:** **`games` 128→256**, **`train_steps` 800→1600**, **`concurrency` 128→256** (same replay ratio on new data; buffer span ~7 iters).
 - Next manual gate: **420 vs 400**.
-- Lightning: `cp ../results/ckpt_iter_0400.pt ../results/latest.pt` then `python lightning-ai/run_train_and_gate.py`. Rebuild native (`pip install -e . --no-deps`) so `take_completed` exports `policy_surprise`.
+- Lightning: `cp ../results/ckpt_iter_0400.pt ../results/latest.pt` then `python lightning-ai/run_train_and_gate.py`.
 
 Last updated: 2026-07-26.

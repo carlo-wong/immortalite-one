@@ -36,9 +36,9 @@ STOP_INTERVAL = 20  # stop after completing iters 160, 180, 200, …
 TRAIN = {
     "sims": 150,  # self-play; iter 261+ (gate stays 100)
     "gate_sims": 100,  # manual gate (run_gate.py / run_train_and_gate.py) only
-    "games": 128,
-    "train_steps": 800,  # reverted after 1200 null result
-    "concurrency": 128,
+    "games": 256,  # 2× scale from 128 (with steps); buffer stays 200k
+    "train_steps": 1600,  # keep ~same replay ratio on new samples
+    "concurrency": 256,
     "selfplay_workers": 4,  # Lightning T4 vCPUs; CUDA central inference auto-enables
     "replay_buffer": 200_000,
     "replay_window": 200_000,
@@ -48,8 +48,8 @@ TRAIN = {
     "value_q_ratio": 0.5,  # unused when value_target=root_q; kept for CLI compatibility
     # Equal policy/value weight (1.5 stall at 401–420; rewind 400).
     "value_coef": 1.0,
-    # KataGo-style write-time surprise: half uniform / half ∝ KL(target‖prior).
-    "policy_surprise_data_weight": 0.5,
+    # Surprise 0.5 failed gate 420 vs 400 (−38 Elo); off for this scale-up.
+    "policy_surprise_data_weight": 0.0,
     "gate_games": 256,
     "gate_workers": 4,
     "gate_concurrency": 256,

@@ -37,7 +37,9 @@ Source of truth for machine gates: `results/metrics_gates.csv` (PASS/historical 
 
 | Lever | Status |
 |--------|--------|
-| `value_coef=1.0`, `root_q`, steps 800, sims 150 | Rewind from 400 after 401–420 INC under coef 1.5; next gate **420 vs 400** |
+| Promote baseline | Still **`ckpt_iter_0400.pt`** |
+| Failed 401–420 tries | coef 1.5 INC; coef 1.0 INC; policy surprise 0.5 INC near FAIL — discarded |
+| **Now** | **2× scale:** `games=256`, `train_steps=1600`, `concurrency=256`, buffer **200k**, surprise **0**; next gate **420 vs 400** |
 
 On PASS, add a row above and append the gate to `metrics_gates.csv`. On FAIL/INC, keep the gate row out of the promote line (tmp dumps OK).
 

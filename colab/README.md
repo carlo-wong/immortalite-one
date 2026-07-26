@@ -49,12 +49,12 @@ Current recipe: iter **361+** — same as `lightning-ai/run_train.py` except wor
 | `move_temperature` / `move_temperature_plies` | **4.0** / **10** | early-ply sampling only; targets untempered |
 | `value_target` | **root_q** | per-ply MCTS Q |
 | `value_coef` | **1.0** | equal policy/value weight (1.5 stall; rewind 400) |
-| `policy_surprise_data_weight` | **0.5** | KataGo write-time KL surprise upsample |
-| `games` | 128 | full GPU batch width (`concurrency` matches) |
-| `train_steps` | **800** | reverted after 1200 null result |
-| `concurrency` | 128 | batched MCTS eval width (one GPU owner) |
+| `policy_surprise_data_weight` | **0.0** | surprise 0.5 failed; off for scale-up |
+| `games` | **256** | 2× scale; full GPU batch width |
+| `train_steps` | **1600** | matched to games×2 (~same replay ratio) |
+| `concurrency` | **256** | matches games |
 | `selfplay_workers` / `gate_workers` | **2** / **2** | self-play: central inference; gates: see note below |
-| `replay_buffer` / `replay_window` | **200k** | ~12 iters at 128 games |
+| `replay_buffer` / `replay_window` | **200k** | unchanged (~7 iters at 256 games) |
 | `draw_penalty` | 1/3 | football 3-1-0 shaping |
 | `resign` | False | off |
 | `lr` / `lr_min` | **1.0e-4** | flat (row 361+) |
@@ -133,7 +133,7 @@ Legacy Zero checkpoints lack `value_target` metadata: resume with `--value-targe
 | `engine._native` import error | Re-run cell 3; ensure pinned cmake / ninja / build tools installed |
 | CUDA torch became CPU-only | Do not `pip install -r requirements.txt` on Colab; reinstall GPU torch and use `--no-deps` |
 | Drive auth failed | Re-run cell 2 |
-| Training "stuck" | One iter can take several minutes at 128 games; watch `metrics.csv` |
+| Training "stuck" | One iter can take ~1h at 256 games on T4; watch `metrics.csv` |
 | OOM | Lower `games` / `concurrency` together, or reduce net in checkpoint (fresh start only) |
 | SPRT always INCONCLUSIVE | Normal early; need more gate games or stronger signal |
 | Old gate CSV garbled | Delete `metrics_gates.csv` and let it recreate |
