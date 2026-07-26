@@ -80,23 +80,23 @@ After the job finishes (success or failure), scripts call `Studio().stop()` when
 
 ### Current `TRAIN` defaults
 
-Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T4 has 4 vCPUs; Colab is 2). Current row: **rewind to 400**, retrain **401–420** with **2× scale** (`games=256`, `train_steps=1600`, `concurrency=256`, buffer **200k**, surprise **off**). Next gate **420 vs 400**. See `colab/README.md` and `TRAINING_CHANGELOG.md`.
+Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T4 has 4 vCPUs; Colab is 2). Current row: **rewind to 400**, retrain **401–420** with **sims 150→200** (games/steps stay 128/800, buffer **200k**, surprise **off**). Next gate **420 vs 400**. See `colab/README.md` and `TRAINING_CHANGELOG.md`.
 
 **Rewind ops:** `cp ../results/ckpt_iter_0400.pt ../results/latest.pt` before train. Keep older shards/ckpts (stamp-skipped mismatches); new iters overwrite the same filenames.
 
 | Key | Value |
 |-----|-------|
-| `sims` | **150** (self-play) |
-| `games` | **256** (2× scale) |
-| `train_steps` | **1600** (matched to games×2) |
-| `concurrency` | **256** |
+| `sims` | **200** (self-play; was 150) |
+| `games` | 128 |
+| `train_steps` | **800** |
+| `concurrency` | 128 |
 | `selfplay_workers` / `gate_workers` | 4 / 4 |
 | `value_target` | `root_q` |
 | `value_coef` | **1.0** (loss = π + v) |
 | `policy_surprise_data_weight` | **0.0** (0.5 failed; off) |
 | `move_temperature` / `move_temperature_plies` | **4.0** / **10** (sampling only) |
 | `resign` | off |
-| `replay_buffer` / `replay_window` | **200k** (unchanged) |
+| `replay_buffer` / `replay_window` | **200k** |
 | `gate_games` / `gate_sims` | **256** / **100** (gates stay 100) |
 | `gate_concurrency` | **256** (native gate parallelization) |
 | `gate_exploration_moves` / `gate_openings` | 0 / masters (128×2 colors) |
