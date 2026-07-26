@@ -76,7 +76,7 @@ tail -f ../results/train_and_gate.log
 
 Writes `latest.pt`, `metrics.csv`, shards every iteration to `../results/`. Training survives browser close (~4h studio limit still applies).
 
-After the job finishes (success or failure), scripts call `Studio().stop()` when `SLEEP_STUDIO=True` in `lightning-ai/studio_sleep.py` (default on). That ends GPU billing immediately instead of waiting for idle auto-sleep. Set `SLEEP_STUDIO = False` if you are debugging interactively. Requires `pip install lightning-sdk` once per studio (usually preinstalled).
+After the job finishes (success or failure), scripts call `Studio().stop()` when `SLEEP_STUDIO=True` in `lightning-ai/studio_sleep.py` (default on), after a **5-minute delay** (`SLEEP_STUDIO_DELAY_SEC`). That ends GPU billing instead of waiting for idle auto-sleep. Set `SLEEP_STUDIO = False` if you are debugging interactively, or `SLEEP_STUDIO_DELAY_SEC = 0` to stop immediately. Requires `pip install lightning-sdk` once per studio (usually preinstalled).
 
 ### Current `TRAIN` defaults
 
