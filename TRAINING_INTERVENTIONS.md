@@ -2,7 +2,7 @@
 
 Official log of **kept** one-knob changes and **PASS** strength gates that define the promote line.
 
-Failed / inconclusive rewinds (e.g. 400 vs 380 tries) are **not** listed here — see `tmp/400_vs_380_tries.csv`.
+Failed / inconclusive rewinds are **not** listed here — see `tmp/400_vs_380_tries.csv` (and sibling metric dumps for tries that were recorded).
 
 Promote baseline: **`ckpt_iter_0380.pt`**.  
 Rule: **one TRAIN knob per 20-iter block**.
