@@ -48,6 +48,8 @@ struct GameActorSample {
   Color player = WHITE;
   float root_q = 0.0f;
   float value = 0.0f;
+  // KL(π_target ‖ π_prior) over legal moves at write time (0 if unavailable).
+  float policy_surprise = 0.0f;
 };
 
 struct CompletedGame {

@@ -54,6 +54,7 @@ from .selfplay import (
     SelfplayWorkerPool,
     _native_match_actors_ready,
     _opening_row,
+    expand_samples_by_policy_surprise,
     play_game_gen,
     play_games_batched,
     play_match_batched_native_actors,
@@ -1125,6 +1126,10 @@ def main() -> None:
         "--value-coef", type=float, default=None,
         help="multiply value_loss in total loss (default 1.0; e.g. 1.5 up-weights value)",
     )
+    parser.add_argument(
+        "--policy-surprise-data-weight", type=float, default=None,
+        help="KataGo-style self-play write weight α in [0,1] (0=off, 0.5=half∝KL)",
+    )
     parser.add_argument("--resign-threshold", type=float, default=None,
                         help="enable resignation when root value <= threshold")
     parser.add_argument("--resign-plies", type=int, default=None,
@@ -1272,6 +1277,10 @@ def main() -> None:
         cfg.train.value_coef = float(args.value_coef)
     if cfg.train.value_coef < 0.0:
         raise ValueError("--value-coef must be >= 0")
+    if args.policy_surprise_data_weight is not None:
+        cfg.train.policy_surprise_data_weight = float(args.policy_surprise_data_weight)
+    if not 0.0 <= cfg.train.policy_surprise_data_weight <= 1.0:
+        raise ValueError("--policy-surprise-data-weight must be in [0, 1]")
     if args.resign_threshold is not None:
         cfg.train.resign_threshold = args.resign_threshold
     if args.resign_plies is not None:
@@ -1310,6 +1319,7 @@ def main() -> None:
         f"value_target={cfg.train.value_target} "
         f"value_q_ratio={cfg.train.value_q_ratio:.3f} "
         f"value_coef={cfg.train.value_coef:.3f} "
+        f"policy_surprise_data_weight={cfg.train.policy_surprise_data_weight:.3f} "
         f"resign_threshold={cfg.train.resign_threshold:.3f} "
         f"resign_plies={cfg.train.resign_plies} "
         f"resign_min_moves={cfg.train.resign_min_moves} "
@@ -1441,11 +1451,15 @@ def main() -> None:
             def _on_game(game: GameResult) -> None:
                 nonlocal new_samples
                 _tag_source_iter(game.samples)
-                buffer.extend(game.samples)
-                iteration_samples.extend(game.samples)
-                new_samples += len(game.samples)
-                termination_counts[game.termination] += 1
+                # Keep ply-length metrics on raw game samples; expand only for train data.
                 game_lengths.append(len(game.samples))
+                train_samples = expand_samples_by_policy_surprise(
+                    game.samples, cfg.train.policy_surprise_data_weight,
+                )
+                buffer.extend(train_samples)
+                iteration_samples.extend(train_samples)
+                new_samples += len(train_samples)
+                termination_counts[game.termination] += 1
                 game_outcomes.append(_winner_of(game))
                 if game.moves:
                     first_moves.append(game.moves[0])

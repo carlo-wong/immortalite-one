@@ -62,6 +62,8 @@ def test_actor_games_match_native_sessions_without_noise() -> None:
         np.testing.assert_array_equal(got.planes, want.planes)
         np.testing.assert_allclose(got.policy, want.policy, rtol=0, atol=1e-3)
         assert got.root_q == want.root_q
+        assert got.policy_surprise == pytest.approx(want.policy_surprise, abs=1e-5)
+        assert got.policy_surprise >= 0.0
 
 
 def test_actor_max_moves_terminates() -> None:

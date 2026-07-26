@@ -93,6 +93,7 @@ Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T
 | `selfplay_workers` / `gate_workers` | 4 / 4 |
 | `value_target` | `root_q` |
 | `value_coef` | **1.0** (loss = π + v) |
+| `policy_surprise_data_weight` | **0.5** (half ∝ KL(target‖prior)) |
 | `move_temperature` / `move_temperature_plies` | **4.0** / **10** (sampling only) |
 | `resign` | off |
 | `replay_buffer` / `replay_window` | 200k |

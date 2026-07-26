@@ -48,6 +48,8 @@ TRAIN = {
     "value_q_ratio": 0.5,  # unused when value_target=root_q; kept for CLI compatibility
     # Equal policy/value weight (1.5 stall at 401–420; rewind 400).
     "value_coef": 1.0,
+    # KataGo-style write-time surprise: half uniform / half ∝ KL(target‖prior).
+    "policy_surprise_data_weight": 0.5,
     "gate_games": 256,
     "gate_workers": 4,
     "gate_concurrency": 256,
@@ -128,6 +130,7 @@ def main() -> None:
             "--value-target", str(TRAIN["value_target"]),
             "--value-q-ratio", str(TRAIN["value_q_ratio"]),
             "--value-coef", str(TRAIN["value_coef"]),
+            "--policy-surprise-data-weight", str(TRAIN["policy_surprise_data_weight"]),
             *resign_args,
             "--syzygy-path", paths.tb_dir,
             "--save-every", str(TRAIN["save_every"]),

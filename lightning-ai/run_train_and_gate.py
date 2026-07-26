@@ -93,6 +93,7 @@ def main() -> None:
             "--value-target", str(TRAIN["value_target"]),
             "--value-q-ratio", str(TRAIN["value_q_ratio"]),
             "--value-coef", str(TRAIN["value_coef"]),
+            "--policy-surprise-data-weight", str(TRAIN["policy_surprise_data_weight"]),
             *resign_args,
             "--syzygy-path", paths.tb_dir,
             "--save-every", str(TRAIN["save_every"]),

@@ -129,6 +129,55 @@ class Sample:
     value: float = 0.0      # filled in once the game finishes
     source_iter: int = 0
     root_q: float = 0.0     # STM-POV searched_root_q (value_target root_q / q_z)
+    # KL(π_target ‖ π_prior) at self-play write time; used only for surprise weighting.
+    policy_surprise: float = 0.0
+
+
+def _clone_sample(sample: Sample) -> Sample:
+    return Sample(
+        planes=np.asarray(sample.planes).copy(),
+        policy=np.asarray(sample.policy).copy(),
+        player=sample.player,
+        value=float(sample.value),
+        source_iter=int(sample.source_iter),
+        root_q=float(sample.root_q),
+        policy_surprise=float(sample.policy_surprise),
+    )
+
+
+def expand_samples_by_policy_surprise(
+    samples: list[Sample],
+    weight: float,
+    *,
+    rng: np.random.Generator | None = None,
+) -> list[Sample]:
+    """Replicate training samples by KataGo frequency weights. ``weight<=0`` is a no-op."""
+    from .policy_surprise import (
+        frequency_weights_from_surprises,
+        replicate_counts_from_weights,
+    )
+
+    if weight <= 0.0 or not samples:
+        return samples
+    surprises = [float(s.policy_surprise) for s in samples]
+    weights = frequency_weights_from_surprises(surprises, weight)
+    if rng is None:
+        rng = np.random.default_rng()
+    counts = replicate_counts_from_weights(weights, rng)
+    out: list[Sample] = []
+    for sample, copies in zip(samples, counts):
+        if copies <= 0:
+            continue
+        out.append(sample if copies == 1 else _clone_sample(sample))
+        for _ in range(copies - 1):
+            out.append(_clone_sample(sample))
+    return out if out else list(samples)
+
+
+def _policy_surprise_from_result(result: SearchResult, improved: np.ndarray) -> float:
+    from .policy_surprise import policy_kl_target_from_prior
+
+    return policy_kl_target_from_prior(result.clean_priors, improved)
 
 
 @dataclass
@@ -259,6 +308,7 @@ def play_game_gen(cfg: Config, simulations: int, *, add_noise: bool = True,
             board.turn,
             source_iter=source_iter,
             root_q=last_root_value,
+            policy_surprise=_policy_surprise_from_result(result, improved),
         ))
 
         resign_enabled = cfg.train.resign_plies > 0 and cfg.train.resign_threshold >= -1.0
@@ -423,6 +473,7 @@ def _native_apply_search_result(
         state.board.turn,
         source_iter=state.source_iter,
         root_q=state.last_root_value,
+        policy_surprise=_policy_surprise_from_result(result, improved),
     ))
 
     resign_enabled = cfg.train.resign_plies > 0 and cfg.train.resign_threshold >= -1.0
@@ -544,6 +595,7 @@ def play_games_batched_native_actors(
         games = raw["games"]
         for meta in games:
             start, end = int(meta["sample_start"]), int(meta["sample_end"])
+            surprises = raw["policy_surprise"] if "policy_surprise" in raw else None
             samples = [
                 Sample(
                     np.asarray(raw["planes"][row], dtype=np.float16),
@@ -552,6 +604,9 @@ def play_games_batched_native_actors(
                     float(raw["values"][row]),
                     source_iter=source_iter,
                     root_q=float(raw["root_q"][row]),
+                    policy_surprise=(
+                        float(surprises[row]) if surprises is not None else 0.0
+                    ),
                 )
                 for row in range(start, end)
             ]
@@ -961,6 +1016,7 @@ def _config_to_dict(cfg: Config) -> dict:
             "value_coef": cfg.train.value_coef,
             "move_temperature": cfg.train.move_temperature,
             "move_temperature_plies": cfg.train.move_temperature_plies,
+            "policy_surprise_data_weight": cfg.train.policy_surprise_data_weight,
         },
     }
 
@@ -1057,9 +1113,13 @@ def _selfplay_worker_run(payload: dict) -> tuple[
     games_done = payload.get("games_done")
 
     def _on_game(game: GameResult) -> None:
-        samples.extend(game.samples)
-        termination_counts[game.termination] += 1
+        # Length metrics stay 1:1 with plies; surprise replication is train-only.
         game_lengths.append(len(game.samples))
+        train_samples = expand_samples_by_policy_surprise(
+            game.samples, cfg.train.policy_surprise_data_weight,
+        )
+        samples.extend(train_samples)
+        termination_counts[game.termination] += 1
         game_outcomes.append(_winner_of_worker(game))
         if games_done is not None:
             games_done.value += 1
@@ -1495,6 +1555,7 @@ def play_match_batched_native_actors(
         for meta in raw["games"]:
             actor_id = int(meta["actor_id"])
             start, end = int(meta["sample_start"]), int(meta["sample_end"])
+            surprises = raw["policy_surprise"] if "policy_surprise" in raw else None
             samples = [
                 Sample(
                     np.asarray(raw["planes"][sample_row], dtype=np.float16),
@@ -1503,6 +1564,9 @@ def play_match_batched_native_actors(
                     float(raw["values"][sample_row]),
                     source_iter=0,
                     root_q=float(raw["root_q"][sample_row]),
+                    policy_surprise=(
+                        float(surprises[sample_row]) if surprises is not None else 0.0
+                    ),
                 )
                 for sample_row in range(start, end)
             ]

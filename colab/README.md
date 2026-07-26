@@ -49,6 +49,7 @@ Current recipe: iter **361+** — same as `lightning-ai/run_train.py` except wor
 | `move_temperature` / `move_temperature_plies` | **4.0** / **10** | early-ply sampling only; targets untempered |
 | `value_target` | **root_q** | per-ply MCTS Q |
 | `value_coef` | **1.0** | equal policy/value weight (1.5 stall; rewind 400) |
+| `policy_surprise_data_weight` | **0.5** | KataGo write-time KL surprise upsample |
 | `games` | 128 | full GPU batch width (`concurrency` matches) |
 | `train_steps` | **800** | reverted after 1200 null result |
 | `concurrency` | 128 | batched MCTS eval width (one GPU owner) |

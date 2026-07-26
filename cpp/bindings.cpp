@@ -377,6 +377,7 @@ class PyGameActorBatch {
     py::array_t<int> players(static_cast<py::ssize_t>(sample_count));
     py::array_t<float> values(static_cast<py::ssize_t>(sample_count));
     py::array_t<float> root_q(static_cast<py::ssize_t>(sample_count));
+    py::array_t<float> policy_surprise(static_cast<py::ssize_t>(sample_count));
     py::list metadata;
     size_t row = 0;
     for (const auto& game : games) {
@@ -394,12 +395,14 @@ class PyGameActorBatch {
         players.mutable_data()[row] = static_cast<int>(sample.player);
         values.mutable_data()[row] = sample.value;
         root_q.mutable_data()[row] = sample.root_q;
+        policy_surprise.mutable_data()[row] = sample.policy_surprise;
         ++row;
       }
     }
     py::dict out;
     out["planes"] = planes; out["policies"] = policies; out["players"] = players;
-    out["values"] = values; out["root_q"] = root_q; out["games"] = metadata;
+    out["values"] = values; out["root_q"] = root_q;
+    out["policy_surprise"] = policy_surprise; out["games"] = metadata;
     return out;
   }
 

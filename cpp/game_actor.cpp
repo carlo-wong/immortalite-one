@@ -13,6 +13,26 @@
 namespace immortalite {
 namespace {
 
+double policy_kl_target_from_prior(const std::vector<double>& prior,
+                                   const std::vector<double>& target) {
+  if (prior.empty() || prior.size() != target.size()) return 0.0;
+  double prior_sum = 0.0;
+  double target_sum = 0.0;
+  for (size_t i = 0; i < prior.size(); ++i) {
+    if (prior[i] < 0.0 || target[i] < 0.0) return 0.0;
+    prior_sum += prior[i];
+    target_sum += target[i];
+  }
+  if (prior_sum <= 0.0 || target_sum <= 0.0) return 0.0;
+  double kl = 0.0;
+  for (size_t i = 0; i < prior.size(); ++i) {
+    const double p = std::max(prior[i] / prior_sum, 1e-12);
+    const double t = std::max(target[i] / target_sum, 1e-12);
+    kl += t * std::log(t / p);
+  }
+  return kl;
+}
+
 std::string termination_name(const Outcome& outcome) {
   switch (outcome.termination) {
     case Termination::Checkmate: return "checkmate";
@@ -221,6 +241,8 @@ void GameActorBatch::finish_search(Actor& actor) {
   double q_sum = 0.0;
   for (size_t i = 0; i < result.visits.size(); ++i) q_sum += result.visits[i] * result.q_values[i];
   sample.root_q = static_cast<float>(visit_sum > 0.0 ? q_sum / visit_sum : result.root_value);
+  sample.policy_surprise = static_cast<float>(
+      policy_kl_target_from_prior(result.clean_priors, improved));
   actor.last_root_value = sample.root_q;
   actor.samples.push_back(std::move(sample));
 
