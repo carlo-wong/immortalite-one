@@ -36,7 +36,7 @@ STOP_INTERVAL = 20  # stop after completing iters 160, 180, 200, …
 TRAIN = {
     "sims": 200,  # self-play; gate stays 100
     "gate_sims": 100,  # manual gate (run_gate.py / run_train_and_gate.py) only
-    "games": 128,
+    "games": 160,  # post-480 freshness experiment; train_steps stays fixed
     "train_steps": 800,
     "concurrency": 128,
     "selfplay_workers": 4,  # Lightning T4 vCPUs; CUDA central inference auto-enables
