@@ -38,7 +38,7 @@ TRAIN = {
     "gate_sims": 100,  # manual gate (run_gate.py / run_train_and_gate.py) only
     "games": 160,  # post-480 freshness experiment; train_steps stays fixed
     "train_steps": 800,
-    "concurrency": 128,
+    "concurrency": 160,
     "selfplay_workers": 4,  # Lightning T4 vCPUs; CUDA central inference auto-enables
     "replay_buffer": 200_000,
     "replay_window": 200_000,
