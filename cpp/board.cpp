@@ -55,7 +55,25 @@ void Position::clear() {
   fullmove_ = 1;
   king_sq_ = {NO_SQUARE, NO_SQUARE};
   key_ = 0;
+  ep_keyed_ = false;
   history_.clear();
+}
+
+Position Position::copy_without_history() const {
+  Position out(NoInitTag{});
+  out.board_ = board_;
+  out.type_bb_ = type_bb_;
+  out.color_bb_ = color_bb_;
+  out.occupied_ = occupied_;
+  out.side_ = side_;
+  out.castling_ = castling_;
+  out.ep_square_ = ep_square_;
+  out.halfmove_ = halfmove_;
+  out.fullmove_ = fullmove_;
+  out.king_sq_ = king_sq_;
+  out.key_ = key_;
+  out.ep_keyed_ = ep_keyed_;
+  return out;
 }
 
 void Position::put_piece(Piece p, Square s) {
@@ -188,8 +206,10 @@ void Position::update_key_ep() {
   }
   k ^= Z_CASTLING[castling_ & 15];
   if (side_ == BLACK) k ^= Z_SIDE;
+  ep_keyed_ = false;
   if (ep_square_ != NO_SQUARE && has_legal_en_passant()) {
     k ^= Z_EP[file_of(ep_square_)];
+    ep_keyed_ = true;
   }
   key_ = k;
 }
@@ -307,10 +327,10 @@ bool Position::has_legal_en_passant() const {
   if (ep_square_ == NO_SQUARE) return false;
   Move buf[8];
   int n = generate_pseudo_ep(*this, buf, 8);
-  Position tmp = *this;
+  Position tmp = copy_without_history();
   for (int i = 0; i < n; ++i) {
     Color us = tmp.side_to_move();
-    tmp.make_move(buf[i]);
+    tmp.make_move_transient(buf[i]);
     bool ok = !tmp.is_attacked(tmp.king_square(us), tmp.side_to_move());
     tmp.unmake_move();
     if (ok) return true;
@@ -318,7 +338,11 @@ bool Position::has_legal_en_passant() const {
   return false;
 }
 
-void Position::make_move(Move m) {
+void Position::make_move(Move m) { make_move_impl(m, true); }
+
+void Position::make_move_transient(Move m) { make_move_impl(m, false); }
+
+void Position::make_move_impl(Move m, bool update_key_and_history) {
   ensure_zobrist();
   Undo u;
   u.move = m;
@@ -326,7 +350,8 @@ void Position::make_move(Move m) {
   u.ep_square = ep_square_;
   u.halfmove = halfmove_;
   u.key_before = key_;
-  u.irreversible = is_irreversible(m);
+  u.ep_keyed_before = ep_keyed_;
+  u.irreversible = update_key_and_history && is_irreversible(m);
   u.captured = NO_PIECE;
 
   const Color us = side_;
@@ -335,29 +360,50 @@ void Position::make_move(Move m) {
   const Square to = m.to();
   Piece piece = board_[from];
 
-  // Clear EP from key path by full rebuild at end; track captured.
+  if (update_key_and_history) {
+    if (ep_keyed_) key_ ^= Z_EP[file_of(ep_square_)];
+    key_ ^= Z_CASTLING[castling_ & 15];
+  }
+
+  // Track and remove captures.
   if (m.flags() & MF_EP) {
     Square cap_sq = to + (us == WHITE ? -8 : 8);
     u.captured = board_[cap_sq];
+    if (update_key_and_history) key_ ^= Z_PIECE[piece_z_index(u.captured)][cap_sq];
     remove_piece(cap_sq);
   } else if (board_[to] != NO_PIECE) {
     u.captured = board_[to];
+    if (update_key_and_history) key_ ^= Z_PIECE[piece_z_index(u.captured)][to];
     remove_piece(to);
   }
 
   // Castling rook move
   if (m.flags() & MF_CASTLE) {
     if (to == 6) {  // white O-O
+      if (update_key_and_history)
+        key_ ^= Z_PIECE[piece_z_index(W_ROOK)][7] ^ Z_PIECE[piece_z_index(W_ROOK)][5];
       move_piece(7, 5);
     } else if (to == 2) {
+      if (update_key_and_history)
+        key_ ^= Z_PIECE[piece_z_index(W_ROOK)][0] ^ Z_PIECE[piece_z_index(W_ROOK)][3];
       move_piece(0, 3);
     } else if (to == 62) {
+      if (update_key_and_history)
+        key_ ^= Z_PIECE[piece_z_index(B_ROOK)][63] ^ Z_PIECE[piece_z_index(B_ROOK)][61];
       move_piece(63, 61);
     } else if (to == 58) {
+      if (update_key_and_history)
+        key_ ^= Z_PIECE[piece_z_index(B_ROOK)][56] ^ Z_PIECE[piece_z_index(B_ROOK)][59];
       move_piece(56, 59);
     }
   }
 
+  if (update_key_and_history) {
+    key_ ^= Z_PIECE[piece_z_index(piece)][from];
+    const Piece placed =
+        (m.flags() & MF_PROMOTION) ? make_piece(us, m.promotion()) : piece;
+    key_ ^= Z_PIECE[piece_z_index(placed)][to];
+  }
   move_piece(from, to);
 
   if (m.flags() & MF_PROMOTION) {
@@ -393,7 +439,14 @@ void Position::make_move(Move m) {
   side_ = them;
 
   history_.push_back(u);
-  update_key_ep();
+  if (update_key_and_history) {
+    key_ ^= Z_CASTLING[castling_ & 15];
+    key_ ^= Z_SIDE;
+    ep_keyed_ = ep_square_ != NO_SQUARE && has_legal_en_passant();
+    if (ep_keyed_) key_ ^= Z_EP[file_of(ep_square_)];
+  } else {
+    ep_keyed_ = false;
+  }
 }
 
 void Position::unmake_move() {
@@ -433,6 +486,7 @@ void Position::unmake_move() {
   }
 
   key_ = u.key_before;
+  ep_keyed_ = u.ep_keyed_before;
 }
 
 int Position::legal_moves(std::vector<Move>& out) const {

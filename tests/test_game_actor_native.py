@@ -7,6 +7,7 @@ import pytest
 
 from engine.config import Config
 from engine.encoding import POLICY_SIZE
+from engine.mcts import _load_native
 from engine.selfplay import play_games_batched_native, play_games_batched_native_actors
 
 
@@ -41,6 +42,23 @@ def _cfg() -> Config:
     cfg.mcts.dirichlet_epsilon = 0.0
     cfg.train.tb_max_pieces = 0
     return cfg
+
+
+def test_actor_default_plane_output_matches_actor_count() -> None:
+    native = _load_native()
+    if native is None or not hasattr(native, "GameActorBatch"):
+        pytest.skip("native GameActorBatch unavailable")
+    batch = native.GameActorBatch(
+        3,
+        {"simulations": 4, "tb_max_pieces": 0, "add_noise": False},
+        {"simulations": 4, "dirichlet_epsilon": 0.0},
+        1,
+    )
+
+    actor_ids, planes = batch.positions_needing_eval()
+
+    assert actor_ids.shape == (3,)
+    assert planes.shape == (3, 20, 8, 8)
 
 
 def test_actor_games_match_native_sessions_without_noise() -> None:

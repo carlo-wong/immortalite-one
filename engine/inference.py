@@ -263,6 +263,9 @@ class CentralInferenceBroker:
         }
         self._next_worker = 0
         self._aborted: str | None = None
+        configure_graphs = getattr(evaluator, "configure_cuda_graphs", None)
+        if callable(configure_graphs):
+            configure_graphs(settings.cuda_graphs, settings.graph_buckets)
 
     def service_once(self, timeout_s: float = 0.0) -> int:
         self._fill(timeout_s)

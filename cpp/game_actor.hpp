@@ -68,6 +68,7 @@ class GameActorBatch {
                  const std::vector<std::uint8_t>& a_is_white = {});
   ~GameActorBatch();
 
+  int actor_count() const { return static_cast<int>(actors_.size()); }
   std::vector<TablebaseRequest> tablebase_requests() const;
   void apply_tablebase(const std::vector<int>& actor_ids,
                        const std::vector<TablebaseOutcome>& outcomes);

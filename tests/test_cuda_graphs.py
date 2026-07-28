@@ -8,6 +8,7 @@ import torch
 
 from engine.config import NetConfig
 from engine.encoding import POLICY_SIZE
+from engine.inference import CentralInferenceBroker, InferenceSettings
 from engine.network import ChessNet, CudaBatchExecutor, NetEvaluator
 
 
@@ -29,6 +30,26 @@ def test_cpu_executor_runs_eagerly_without_graphs() -> None:
     assert executor.graph_fallback_count == 0
     assert not executor._cuda
     assert executor._graphs == {}
+
+
+def test_custom_graph_buckets_and_broker_settings_are_wired() -> None:
+    executor = CudaBatchExecutor(
+        _net(), "cpu", graph_mode="on", graph_buckets=(4, 12)
+    )
+    assert executor._bucket_for(4) == 4
+    assert executor._bucket_for(5) == 12
+    assert executor._bucket_for(13) is None
+
+    class RecordingEvaluator:
+        configured = None
+
+        def configure_cuda_graphs(self, mode, buckets) -> None:
+            self.configured = (mode, buckets)
+
+    evaluator = RecordingEvaluator()
+    settings = InferenceSettings(cuda_graphs="off", graph_buckets=(4, 12))
+    CentralInferenceBroker(evaluator, None, None, (), settings)
+    assert evaluator.configured == ("off", (4, 12))
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")

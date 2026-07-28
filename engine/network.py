@@ -86,12 +86,19 @@ class CudaBatchExecutor:
         device: str,
         graph_mode: str = "auto",
         profile: ProfileCounters | None = None,
+        graph_buckets: tuple[int, ...] = BUCKETS,
     ):
         if graph_mode not in {"auto", "on", "off"}:
             raise ValueError("graph_mode must be 'auto', 'on', or 'off'")
+        if not graph_buckets or any(
+            bucket <= 0 or (i and bucket <= graph_buckets[i - 1])
+            for i, bucket in enumerate(graph_buckets)
+        ):
+            raise ValueError("graph_buckets must be strictly increasing positive integers")
         self.net = net
         self.device = torch.device(device)
         self.graph_mode = graph_mode
+        self.graph_buckets = tuple(int(bucket) for bucket in graph_buckets)
         self.profile = profile
         self._cuda = self.device.type == "cuda" and torch.cuda.is_available()
         self._graphs: dict[int, tuple[torch.cuda.CUDAGraph, torch.Tensor, torch.Tensor, torch.Tensor]] = {}
@@ -123,7 +130,7 @@ class CudaBatchExecutor:
         return tuple(parameter._version for parameter in self.net.parameters())
 
     def _bucket_for(self, n: int) -> int | None:
-        return next((bucket for bucket in self.BUCKETS if n <= bucket), None)
+        return next((bucket for bucket in self.graph_buckets if n <= bucket), None)
 
     def _ensure_lanes(self, bucket: int) -> None:
         if bucket in self._host_lanes:
@@ -224,17 +231,37 @@ class NetEvaluator:
         device: str = "cpu",
         profile: ProfileCounters | None = None,
         graph_mode: str = "auto",
+        graph_buckets: tuple[int, ...] = CudaBatchExecutor.BUCKETS,
     ):
         self.net = net.to(device).eval()
         self.device = device
         self.profile = profile
         self.graph_mode = graph_mode
+        self.graph_buckets = tuple(graph_buckets)
         self._use_cuda_autocast = str(device).startswith("cuda")
         self._batch_cap = 0
         self._planes_buf: np.ndarray | None = None
         self._host_input: torch.Tensor | None = None
         self._profile_cuda_events: tuple[torch.cuda.Event, ...] | None = None
         self._cuda_executor: CudaBatchExecutor | None = None
+
+    def configure_cuda_graphs(
+        self, graph_mode: str, graph_buckets: tuple[int, ...]
+    ) -> None:
+        """Apply central-inference graph settings, invalidating stale captures."""
+        buckets = tuple(graph_buckets)
+        if self.graph_mode == graph_mode and self.graph_buckets == buckets:
+            return
+        if graph_mode not in {"auto", "on", "off"}:
+            raise ValueError("graph_mode must be 'auto', 'on', or 'off'")
+        if not buckets or any(
+            bucket <= 0 or (i and bucket <= buckets[i - 1])
+            for i, bucket in enumerate(buckets)
+        ):
+            raise ValueError("graph_buckets must be strictly increasing positive integers")
+        self.graph_mode = graph_mode
+        self.graph_buckets = buckets
+        self._cuda_executor = None
 
     def _ensure_batch_buffers(self, batch_size: int) -> None:
         if batch_size <= self._batch_cap and self._planes_buf is not None:
@@ -286,31 +313,27 @@ class NetEvaluator:
         value = self.net.value_from_logits(value_logits)
         return logits.float().cpu().numpy(), value.float().cpu().numpy()
 
-    @torch.inference_mode()
-    def evaluate_planes(self, planes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Evaluate pre-encoded planes.
-
-        Args:
-            planes: float32 array of shape ``(N, 20, 8, 8)``.
-
-        Returns:
-            ``(logits, values)`` where ``logits`` is ``(N, 4672)`` and
-            ``values`` is ``(N,)`` in ``[-1, 1]``.
-        """
+    def _validate_planes(self, planes: np.ndarray) -> tuple[np.ndarray, int]:
         if planes.ndim != 4 or planes.shape[1:] != (NUM_INPUT_PLANES, 8, 8):
             raise ValueError(
                 f"planes must have shape (N, {NUM_INPUT_PLANES}, 8, 8), got {planes.shape}"
             )
         n = int(planes.shape[0])
-        if n == 0:
-            return np.zeros((0, POLICY_SIZE), dtype=np.float32), np.zeros(0, dtype=np.float32)
-        profile = self.profile
-        assembly_started = time.perf_counter() if profile is not None else 0.0
         if planes.dtype != np.float32:
             planes = np.asarray(planes, dtype=np.float32)
-        contiguous = np.ascontiguousarray(planes)
+        return np.ascontiguousarray(planes), n
+
+    @torch.inference_mode()
+    def _forward_policy_value(
+        self, contiguous: np.ndarray
+    ) -> tuple[torch.Tensor, torch.Tensor, bool]:
+        """Run the net; return ``(logits, values, used_eager_cuda_events)``.
+
+        Tensors remain on the inference device so callers can gather before D2H.
+        """
+        n = int(contiguous.shape[0])
+        profile = self.profile
         if profile is not None:
-            profile.add_seconds("network.input_staging", time.perf_counter() - assembly_started)
             profile.add_count("network.calls")
             profile.add_count("network.positions", n)
             profile.add_bytes("network.input", contiguous.nbytes)
@@ -331,7 +354,11 @@ class NetEvaluator:
         if self._use_cuda_autocast and self.graph_mode != "off":
             if self._cuda_executor is None:
                 self._cuda_executor = CudaBatchExecutor(
-                    self.net, self.device, graph_mode=self.graph_mode, profile=profile
+                    self.net,
+                    self.device,
+                    graph_mode=self.graph_mode,
+                    profile=profile,
+                    graph_buckets=self.graph_buckets,
                 )
             logits, value = self._cuda_executor.forward(contiguous)
         elif self._use_cuda_autocast:
@@ -351,6 +378,33 @@ class NetEvaluator:
             value = self.net.value_from_logits(value_logits)
         if profile is not None:
             profile.add_seconds("network.forward_host", time.perf_counter() - forward_started)
+        if cuda_events:
+            profile.add_seconds("network.h2d_cuda", h2d_start.elapsed_time(h2d_end) / 1000.0)
+            profile.add_seconds(
+                "network.forward_cuda", forward_start.elapsed_time(forward_end) / 1000.0
+            )
+        return logits, value, cuda_events
+
+    @torch.inference_mode()
+    def evaluate_planes(self, planes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Evaluate pre-encoded planes.
+
+        Args:
+            planes: float32 array of shape ``(N, 20, 8, 8)``.
+
+        Returns:
+            ``(logits, values)`` where ``logits`` is ``(N, 4672)`` and
+            ``values`` is ``(N,)`` in ``[-1, 1]``.
+        """
+        contiguous, n = self._validate_planes(planes)
+        if n == 0:
+            return np.zeros((0, POLICY_SIZE), dtype=np.float32), np.zeros(0, dtype=np.float32)
+        profile = self.profile
+        assembly_started = time.perf_counter() if profile is not None else 0.0
+        if profile is not None:
+            profile.add_seconds("network.input_staging", time.perf_counter() - assembly_started)
+
+        logits, value, _cuda_events = self._forward_policy_value(contiguous)
 
         policy_started = time.perf_counter() if profile is not None else 0.0
         policy = logits.float().cpu().numpy()
@@ -365,11 +419,6 @@ class NetEvaluator:
         if profile is not None:
             profile.add_seconds("network.value_d2h_host", time.perf_counter() - value_started)
             profile.add_bytes("network.value_d2h", values.nbytes)
-        if cuda_events:
-            profile.add_seconds("network.h2d_cuda", h2d_start.elapsed_time(h2d_end) / 1000.0)
-            profile.add_seconds(
-                "network.forward_cuda", forward_start.elapsed_time(forward_end) / 1000.0
-            )
         return policy, values
 
     @torch.inference_mode()
@@ -379,12 +428,12 @@ class NetEvaluator:
         legal_indices: np.ndarray,
         legal_offsets: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Evaluate planes and return policy logits packed in CSR legal-move order."""
-        if planes.ndim != 4 or planes.shape[1:] != (NUM_INPUT_PLANES, 8, 8):
-            raise ValueError(
-                f"planes must have shape (N, {NUM_INPUT_PLANES}, 8, 8), got {planes.shape}"
-            )
-        n = int(planes.shape[0])
+        """Evaluate planes and return policy logits packed in CSR legal-move order.
+
+        Gathers legal logits on-device before D2H so the full ``(N, 4672)`` policy
+        is not transferred when only legal moves are needed.
+        """
+        contiguous, n = self._validate_planes(planes)
         indices = np.asarray(legal_indices)
         offsets = np.asarray(legal_offsets)
         if not np.issubdtype(indices.dtype, np.integer):
@@ -393,23 +442,34 @@ class NetEvaluator:
             raise ValueError("legal_offsets must be an integer array")
         if offsets.shape != (n + 1,):
             raise ValueError(f"legal_offsets must have shape ({n + 1},), got {offsets.shape}")
-        if offsets[0] != 0 or offsets[-1] != len(indices):
+        if int(offsets[0]) != 0 or int(offsets[-1]) != len(indices):
             raise ValueError("legal_offsets must span legal_indices")
         if np.any(offsets[1:] < offsets[:-1]):
             raise ValueError("legal_offsets must be nondecreasing")
-        if np.any(indices < 0) or np.any(indices >= POLICY_SIZE):
+        if len(indices) and (np.any(indices < 0) or np.any(indices >= POLICY_SIZE)):
             raise ValueError("legal_indices contain an out-of-range policy index")
         if n == 0:
             return np.empty(0, dtype=np.float32), np.empty(0, dtype=np.float32)
 
-        logits, values = self.evaluate_planes(planes)
-        started = time.perf_counter() if self.profile is not None else 0.0
-        gathered = np.empty(len(indices), dtype=np.float32)
-        for row in range(n):
-            start, end = int(offsets[row]), int(offsets[row + 1])
-            gathered[start:end] = logits[row, indices[start:end]]
-        if self.profile is not None:
-            self.profile.add_seconds("network.legal_gather", time.perf_counter() - started)
-            self.profile.add_count("network.legal_gather_calls")
-            self.profile.add_bytes("network.legal_gather", gathered.nbytes)
+        profile = self.profile
+        assembly_started = time.perf_counter() if profile is not None else 0.0
+        if profile is not None:
+            profile.add_seconds("network.input_staging", time.perf_counter() - assembly_started)
+
+        logits, value, _cuda_events = self._forward_policy_value(contiguous)
+
+        started = time.perf_counter() if profile is not None else 0.0
+        counts = np.diff(offsets.astype(np.int64, copy=False))
+        row_ids = np.repeat(np.arange(n, dtype=np.int64), counts)
+        linear_indices = row_ids * POLICY_SIZE + indices.astype(np.int64, copy=False)
+        device = logits.device
+        gather_t = torch.from_numpy(np.ascontiguousarray(linear_indices)).to(device)
+        gathered_t = torch.take(logits, gather_t).float()
+        gathered = gathered_t.cpu().numpy()
+        values = value.float().cpu().numpy()
+        if profile is not None:
+            profile.add_seconds("network.legal_gather", time.perf_counter() - started)
+            profile.add_count("network.legal_gather_calls")
+            profile.add_bytes("network.legal_gather", gathered.nbytes)
+            profile.add_bytes("network.value_d2h", values.nbytes)
         return gathered, values

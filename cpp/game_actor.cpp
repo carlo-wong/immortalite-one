@@ -278,7 +278,10 @@ void GameActorBatch::finish_search(Actor& actor) {
     chosen = static_cast<size_t>(std::distance(
         result.visits.begin(), std::max_element(result.visits.begin(), result.visits.end())));
   }
-  const Move move = actor.board.parse_uci(result.moves_uci[chosen]);
+  if (result.native_moves.size() != result.moves_uci.size()) {
+    throw std::logic_error("MCTS native move/result size mismatch");
+  }
+  const Move move = result.native_moves[chosen];
   if (move.null()) throw std::logic_error("MCTS returned illegal root move");
   actor.board.make_move(move);
   actor.moves.push_back(result.moves_uci[chosen]);

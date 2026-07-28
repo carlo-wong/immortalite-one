@@ -4,6 +4,7 @@
 #include "movegen.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -271,11 +272,13 @@ void MctsSession::backup(float value) {
   for (int i = 0; i < path_depth_; ++i) path_board_.unmake_move();
   path_.clear();
   path_depth_ = 0;
-  path_board_ = root_board_;
+  assert(path_board_.transposition_key() == root_board_.transposition_key());
 }
 
 void MctsSession::select_to_leaf() {
-  path_board_ = root_board_;
+  // Every completed path is unmade by backup(), so path_board_ is already at
+  // the root. Reassigning here deep-copied the full game history per simulation.
+  assert(path_board_.transposition_key() == root_board_.transposition_key());
   path_.clear();
   path_.push_back(root_.get());
   path_depth_ = 0;
@@ -414,6 +417,7 @@ void MctsSession::collect_result() {
   for (auto& [idx, child] : root_->children) {
     if (child->move.null()) continue;
     result_.moves_uci.push_back(move_to_uci(child->move));
+    result_.native_moves.push_back(child->move);
     result_.indices.push_back(idx);
     result_.visits.push_back(static_cast<double>(child->N));
     double q = child->N > 0 ? -child->Q() : static_cast<double>(root_value_);

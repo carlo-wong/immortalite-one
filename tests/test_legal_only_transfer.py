@@ -49,6 +49,38 @@ def test_evaluate_legal_matches_full_policy_gather(tiny_evaluator) -> None:
     np.testing.assert_allclose(legal_values, full_values, rtol=0, atol=1e-6)
 
 
+def test_evaluate_legal_avoids_dense_policy_d2h(tiny_evaluator, monkeypatch) -> None:
+    """Sparse gather must not materialize a full (N, 4672) host policy array."""
+    if not hasattr(tiny_evaluator, "evaluate_legal"):
+        pytest.skip("NetEvaluator.evaluate_legal has not been restored")
+
+    board = chess.Board()
+    planes = board_to_planes(board)[None, ...]
+    indices = np.fromiter(legal_move_indices(board), dtype=np.int64)
+    offsets = np.asarray([0, len(indices)], dtype=np.int64)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("evaluate_legal must not call evaluate_planes")
+
+    monkeypatch.setattr(tiny_evaluator, "evaluate_planes", _boom)
+    legal_logits, legal_values = tiny_evaluator.evaluate_legal(planes, indices, offsets)
+    assert legal_logits.shape == (len(indices),)
+    assert legal_values.shape == (1,)
+
+
+def test_evaluate_legal_preserves_csr_order_with_empty_rows(tiny_evaluator) -> None:
+    boards = [chess.Board(), chess.Board(), chess.Board()]
+    planes = np.stack([board_to_planes(board) for board in boards])
+    legal = np.fromiter(legal_move_indices(boards[1]), dtype=np.int32)
+    offsets = np.asarray([0, 0, len(legal), len(legal)], dtype=np.int32)
+
+    full_logits, full_values = tiny_evaluator.evaluate_planes(planes)
+    packed, values = tiny_evaluator.evaluate_legal(planes, legal, offsets)
+
+    np.testing.assert_allclose(packed, full_logits[1, legal], rtol=0, atol=1e-6)
+    np.testing.assert_allclose(values, full_values, rtol=0, atol=1e-6)
+
+
 def test_pending_legal_indices_follow_python_encoding_order() -> None:
     native = _load_native()
     if native is None or not hasattr(native, "MctsSession"):

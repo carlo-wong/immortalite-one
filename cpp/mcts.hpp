@@ -26,6 +26,9 @@ struct MctsConfig {
 
 struct MctsResult {
   std::vector<std::string> moves_uci;
+  // Native callers can apply the selected root move without reparsing UCI and
+  // rescanning the same legal move list. Python-facing result shape is unchanged.
+  std::vector<Move> native_moves;
   std::vector<int> indices;
   std::vector<double> visits;
   std::vector<double> q_values;

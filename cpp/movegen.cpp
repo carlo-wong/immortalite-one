@@ -220,7 +220,7 @@ int gen_pseudo_legal(const Position& pos, Move* out, int max_out) {
 
 bool leaves_king_in_check(Position& pos, Move m) {
   Color us = pos.side_to_move();
-  pos.make_move(m);
+  pos.make_move_transient(m);
   bool bad = pos.is_attacked(pos.king_square(us), pos.side_to_move());
   pos.unmake_move();
   return bad;
@@ -272,8 +272,9 @@ int generate_pseudo_ep(const Position& pos, Move* out, int max_out) {
 int generate_legal_moves(const Position& pos, Move* out, int max_out) {
   Move buf[256];
   int pseudo = gen_pseudo_legal(pos, buf, 256);
-  // Need mutable copy for make/unmake legality filter.
-  Position tmp = pos;
+  // Legal probes only inspect the fixed board state. Do not copy potentially
+  // long repetition history or update hashes for every pseudo-legal move.
+  Position tmp = pos.copy_without_history();
   int n = 0;
   for (int i = 0; i < pseudo; ++i) {
     if (!leaves_king_in_check(tmp, buf[i])) {

@@ -16,6 +16,7 @@ struct Undo {
   Square ep_square = NO_SQUARE;
   int halfmove = 0;
   std::uint64_t key_before = 0;  // transposition key before the move
+  bool ep_keyed_before = false;
   bool irreversible = false;
 };
 
@@ -33,6 +34,8 @@ class Position {
   bool apply_uci_list(const std::vector<std::string>& ucis);
 
   Position copy() const { return *this; }
+  // Fixed-size board state only. Legal filtering does not need repetition history.
+  Position copy_without_history() const;
 
   Color side_to_move() const { return side_; }
   int halfmove_clock() const { return halfmove_; }
@@ -52,6 +55,9 @@ class Position {
   void move_piece(Square from, Square to);
 
   void make_move(Move m);
+  // Legality probes only: updates board state and remains unmakeable, but skips
+  // repetition bookkeeping and Zobrist work that the probe cannot observe.
+  void make_move_transient(Move m);
   void unmake_move();
 
   bool in_check() const;
@@ -89,9 +95,13 @@ class Position {
   }
 
  private:
+  struct NoInitTag {};
+  explicit Position(NoInitTag) {}
+
   friend void init_attack_tables();
   friend class MoveGen;
 
+  void make_move_impl(Move m, bool update_key_and_history);
   void update_key_ep();
   bool has_legal_en_passant() const;
   bool is_zeroing(Move m) const;
@@ -111,6 +121,7 @@ class Position {
   int fullmove_ = 1;
   std::array<Square, 2> king_sq_{NO_SQUARE, NO_SQUARE};
   std::uint64_t key_ = 0;
+  bool ep_keyed_ = false;
   std::vector<Undo> history_;
 };
 

@@ -135,6 +135,31 @@ int move_to_index_fen(const std::string& fen, const std::string& uci) {
   return immortalite::move_to_index(pos, m);
 }
 
+std::uint64_t transposition_key_fen(const std::string& fen) {
+  immortalite::Position pos(fen);
+  return pos.transposition_key();
+}
+
+py::tuple zobrist_trace_fen(const std::string& fen, const std::vector<std::string>& moves) {
+  immortalite::Position pos(fen);
+  std::vector<std::uint64_t> forward{pos.transposition_key()};
+  forward.reserve(moves.size() + 1);
+  for (const auto& uci : moves) {
+    const immortalite::Move move = pos.parse_uci(uci);
+    if (move.null()) throw std::invalid_argument("illegal move in Zobrist trace");
+    pos.make_move(move);
+    forward.push_back(pos.transposition_key());
+  }
+  std::vector<std::uint64_t> backward;
+  backward.reserve(moves.size() + 1);
+  backward.push_back(pos.transposition_key());
+  for (size_t i = 0; i < moves.size(); ++i) {
+    pos.unmake_move();
+    backward.push_back(pos.transposition_key());
+  }
+  return py::make_tuple(forward, backward);
+}
+
 class PyMctsSession {
  public:
   PyMctsSession(const std::string& fen, int simulations, const py::dict& config, bool add_noise,
@@ -300,7 +325,8 @@ class PyGameActorBatch {
     py::array_t<float, py::array::c_style> target;
     if (out.is_none()) {
       owned = py::array_t<float>(py::array::ShapeContainer{
-          static_cast<py::ssize_t>(1024), static_cast<py::ssize_t>(immortalite::NUM_INPUT_PLANES),
+          static_cast<py::ssize_t>(batch_.actor_count()),
+          static_cast<py::ssize_t>(immortalite::NUM_INPUT_PLANES),
           static_cast<py::ssize_t>(8), static_cast<py::ssize_t>(8)});
       target = owned;
     } else {
@@ -445,6 +471,10 @@ PYBIND11_MODULE(_native, m) {
         "List of (policy_index, uci) for legal moves");
   m.def("move_to_index_fen", &move_to_index_fen, py::arg("fen"), py::arg("uci"),
         "Map UCI move to policy index");
+  m.def("transposition_key_fen", &transposition_key_fen, py::arg("fen"),
+        "Return the native transposition key recomputed from FEN");
+  m.def("zobrist_trace_fen", &zobrist_trace_fen, py::arg("fen"), py::arg("moves"),
+        "Return incremental make and unmake transposition-key traces");
 
   py::class_<PyMctsSession>(m, "MctsSession")
       .def(py::init<const std::string&, int, const py::dict&, bool,
