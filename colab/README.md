@@ -57,7 +57,7 @@ Current recipe: iter **361+** — same as `lightning-ai/run_train.py` except wor
 | `replay_buffer` / `replay_window` | **200k** | ~12–14 iters at 128 games |
 | `draw_penalty` | 1/3 | football 3-1-0 shaping |
 | `resign` | False | off |
-| `lr` / `lr_min` | **1.0e-4** | flat (row 361+) |
+| `lr` / `lr_min` | **7.5e-5** | flat (row 521+) |
 | `gate_games` / `gate_sims` | **256 / 100** | manual gate cell 6 only |
 | `gate_concurrency` | **256** | gate parallelization knob (native path) |
 | `gate_exploration_moves` | **0** | after masters book (no temperature) |

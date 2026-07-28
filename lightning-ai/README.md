@@ -100,7 +100,7 @@ Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T
 | `gate_games` / `gate_sims` | **256** / **100** (gates stay 100) |
 | `gate_concurrency` | **256** (native gate parallelization) |
 | `gate_exploration_moves` / `gate_openings` | 0 / masters (128×2 colors) |
-| `lr` / `lr_min` | **1.0e-4** flat |
+| `lr` / `lr_min` | **7.5e-5** flat |
 | Training span | auto-stops at iters 360, 380, … (multiples of 20) |
 | `RESET_OPTIMIZER` | `False` |
 

@@ -34,8 +34,11 @@ Gates run every 20 iters vs the checkpoint **20 iters ago**. Edit only the `TRAI
 | **401** | **128** | **800** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | rewind 400; `root_q`; **`value_coef` 1.5→1.0** — INC ~0.51 vs 400; not kept |
 | **401**¶ | **128** | **800** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | rewind 400; **`policy_surprise_data_weight=0.5`** — INC near FAIL (−38 Elo); not kept |
 | **401**‖ | **128** | **800** | **128** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | rewind 400; surprise **off**; **sims 150→200** (games/steps held); next gate **420 vs 400** |
+| **481** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | games 128→160 (steps held); gate **500 vs 480** PASS (+63 Elo) |
+| **501** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | **`c_puct` 1.5→1.25** (gates keep 1.5); gate **520 vs 500** soft PASS (+41 Elo) |
+| **521** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | one TRAIN knob: **LR / lr_min 1.0e-4→7.5e-5**; hold games/sims/c_puct/buffer; next gate **540 vs 520** |
 
-**Current row:** start **401** (rewind) — restore **`ckpt_iter_0400.pt` → `latest.pt`**, `value_target=root_q`, **`sims=200`**, games/steps **128/800**, buffer **200k**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Manual gate after the block: **420 vs 400**.
+**Current row:** start **521** — resume from tip **520** (`latest.pt` / `ckpt_iter_0520.pt`), `value_target=root_q`, **`sims=200`**, games/steps **160/800**, **`c_puct=1.25`**, buffer **200k**, **LR 7.5e-5 flat**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Manual gate after the block: **540 vs 520** (optional lag **520 vs 480** first).
 
 Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net only with a new `--checkpoint-dir`.
 
@@ -189,12 +192,26 @@ Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net o
 - Train curves looked healthier (pl/vl↓, top1↑; grad_norm ~16–17).
 - Gate **420 vs 400**: **INCONCLUSIVE** near FAIL — **94–40–122**, score **0.445**, **−38 Elo**, CI **[−78, +0.8]**. Worse than prior 420-slot tries. Not kept.
 
-### Iter 401 — rewind + sims 200 (current)
+### Iter 401 — rewind + sims 200
 
 - Restore **`ckpt_iter_0400.pt`** as `latest.pt`. Surprise **off**. Hold `value_coef=1.0` / `root_q` / games 128 / steps 800 / LR 1e-4 / buffer **200k**.
 - **One TRAIN knob:** **self-play `sims` 150→200** (gate stays **100**).
-- (Abandoned without running: 2× games/steps scale-up.)
-- Next manual gate: **420 vs 400**.
-- Lightning: `cp ../results/ckpt_iter_0400.pt ../results/latest.pt` then `python lightning-ai/run_train_and_gate.py`.
+- Gate **420 vs 400**: PASS. Kept.
 
-Last updated: 2026-07-26.
+### Iter 481 — games 160
+
+- **One TRAIN knob:** self-play **games 128→160** (concurrency 160; steps held at 800).
+- Gate **500 vs 480**: PASS (+63 Elo).
+
+### Iter 501 — c_puct 1.25
+
+- **One TRAIN knob:** self-play **`c_puct` 1.5→1.25** (gates still force Config default 1.5).
+- Gate **520 vs 500**: soft PASS (+41 Elo, CI LB +3.6).
+
+### Iter 521 — LR 7.5e-5 flat (current)
+
+- Resume from tip **520**. Hold games 160 / sims 200 / steps 800 / buffer 200k / `c_puct=1.25` / `root_q`.
+- **One TRAIN knob:** **LR / lr_min 1.0e-4 → 7.5e-5** (flat).
+- Next manual gate: **540 vs 520**. Optional lag confirm: **520 vs 480**.
+
+Last updated: 2026-07-28.
