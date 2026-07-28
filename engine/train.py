@@ -27,7 +27,7 @@ import torch
 import torch.nn.functional as F
 from tqdm.auto import tqdm
 
-from .config import Config, NetConfig
+from .config import Config, MCTSConfig, NetConfig
 from .encoding import ENCODING_VERSION
 from .first_move_stats import (
     CSV_COLUMNS as FIRST_MOVE_CSV_COLUMNS,
@@ -589,6 +589,9 @@ def play_match(net_a: ChessNet, net_b: ChessNet, cfg: Config,
     match_cfg.mcts.draw_contempt = 0.0
     # Pin claim_draw so gates always match self-play search (Config default True).
     match_cfg.mcts.claim_draw = True
+    # Keep gate PUCT on the Config default so Elo ladder stays comparable when
+    # self-play retunes --c-puct (same spirit as gate_sims ≠ self-play sims).
+    match_cfg.mcts.c_puct = MCTSConfig().c_puct
     # No artificial ply cap — Syzygy, 50-move, threefold, etc. end games naturally.
     match_cfg.train.max_game_moves = 10_000
     # Disable resignation during strength evaluation matches
@@ -1109,6 +1112,10 @@ def main() -> None:
     # Per-iteration workload overrides (lower these for faster CPU iterations).
     parser.add_argument("--games", type=int, default=None, help="self-play games per iteration")
     parser.add_argument("--sims", type=int, default=None, help="MCTS sims/move")
+    parser.add_argument(
+        "--c-puct", type=float, default=None,
+        help="MCTS PUCT exploration constant for self-play (gates keep Config default)",
+    )
     parser.add_argument("--train-steps", type=int, default=None, help="optimizer steps per iteration")
     parser.add_argument("--max-game-moves", type=int, default=None,
                         help="self-play ply safety ceiling (default 10000; not a soft target)")
@@ -1243,6 +1250,10 @@ def main() -> None:
         cfg.train.sims_per_move = args.sims
         # Keep analyze/UCI default aligned with training sims (gates pass sims= explicitly).
         cfg.mcts.simulations = args.sims
+    if args.c_puct is not None:
+        if float(args.c_puct) <= 0.0:
+            raise ValueError("--c-puct must be > 0")
+        cfg.mcts.c_puct = float(args.c_puct)
     if args.concurrency is not None:
         cfg.train.selfplay_concurrency = args.concurrency
     if args.replay_window is not None:
@@ -1305,6 +1316,8 @@ def main() -> None:
         "config: "
         f"games={cfg.train.games_per_iteration} "
         f"steps={cfg.train.train_steps_per_iteration} "
+        f"sims={cfg.mcts.simulations} "
+        f"c_puct={cfg.mcts.c_puct:.3f} "
         f"concurrency={cfg.train.selfplay_concurrency} "
         f"selfplay_workers={args.selfplay_workers} "
         f"central_inference={'on' if central_inference else 'off'} "

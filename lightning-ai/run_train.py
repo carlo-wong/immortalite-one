@@ -35,6 +35,7 @@ STOP_INTERVAL = 20  # stop after completing iters 160, 180, 200, …
 
 TRAIN = {
     "sims": 200,  # self-play; gate stays 100
+    "c_puct": 1.25,  # post-500 search retune; gates keep Config default 1.5
     "gate_sims": 100,  # manual gate (run_gate.py / run_train_and_gate.py) only
     "games": 160,  # post-480 freshness experiment; train_steps stays fixed
     "train_steps": 800,
@@ -126,6 +127,7 @@ def main() -> None:
             "--replay-buffer", str(TRAIN["replay_buffer"]),
             "--replay-window", str(TRAIN["replay_window"]),
             "--sims", str(TRAIN["sims"]),
+            "--c-puct", str(TRAIN["c_puct"]),
             "--draw-penalty", str(TRAIN["draw_penalty"]),
             "--value-target", str(TRAIN["value_target"]),
             "--value-q-ratio", str(TRAIN["value_q_ratio"]),
