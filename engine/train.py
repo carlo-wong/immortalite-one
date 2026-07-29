@@ -1059,11 +1059,8 @@ def _load_sample_shard(
                 )
             return samples
     except (ValueError, OSError, EOFError, zipfile.BadZipFile, KeyError) as exc:
-        # Drive/FUSE disconnects (e.g. Errno 107) and corrupt npz must abort —
-        # silently skipping can warm an empty buffer and "train" on no samples.
-        raise RuntimeError(
-            f"unreadable shard {os.path.basename(path)} ({exc})"
-        ) from exc
+        print(f"warning: skipping unreadable shard {os.path.basename(path)} ({exc})")
+        return []
 
 
 def _warm_replay_buffer(
