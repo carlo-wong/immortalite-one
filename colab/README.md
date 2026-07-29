@@ -54,7 +54,7 @@ Current recipe: iter **361+** — same as `lightning-ai/run_train.py` except wor
 | `train_steps` | **800** | |
 | `concurrency` | 128 | batched MCTS eval width (one GPU owner) |
 | `selfplay_workers` / `gate_workers` | **2** / **2** | self-play: central inference; gates: see note below |
-| `replay_buffer` / `replay_window` | **200k** | ~12–14 iters at 128 games |
+| `replay_buffer` / `replay_window` | **150k** | ~8 iters at 160 games |
 | `draw_penalty` | 1/3 | football 3-1-0 shaping |
 | `resign` | False | off |
 | `lr` / `lr_min` | **7.5e-5** | flat (row 521+) |

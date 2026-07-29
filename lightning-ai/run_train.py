@@ -41,8 +41,8 @@ TRAIN = {
     "train_steps": 800,
     "concurrency": 160,
     "selfplay_workers": 4,  # Lightning T4 vCPUs; CUDA central inference auto-enables
-    "replay_buffer": 200_000,
-    "replay_window": 200_000,
+    "replay_buffer": 150_000,
+    "replay_window": 150_000,
     "draw_penalty": 1 / 3,
     # Per-ply MCTS root Q labels; gates still use WDL.
     "value_target": "root_q",

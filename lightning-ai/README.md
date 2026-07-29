@@ -96,7 +96,7 @@ Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T
 | `policy_surprise_data_weight` | **0.0** (0.5 failed; off) |
 | `move_temperature` / `move_temperature_plies` | **4.0** / **10** (sampling only) |
 | `resign` | off |
-| `replay_buffer` / `replay_window` | **200k** |
+| `replay_buffer` / `replay_window` | **150k** |
 | `gate_games` / `gate_sims` | **256** / **100** (gates stay 100) |
 | `gate_concurrency` | **256** (native gate parallelization) |
 | `gate_exploration_moves` / `gate_openings` | 0 / masters (128×2 colors) |
