@@ -1116,6 +1116,10 @@ def main() -> None:
         "--c-puct", type=float, default=None,
         help="MCTS PUCT exploration constant for self-play (gates keep Config default)",
     )
+    parser.add_argument(
+        "--dirichlet-epsilon", type=float, default=None,
+        help="root Dirichlet noise mix for self-play (0=off noise mix; gates use add_noise=False)",
+    )
     parser.add_argument("--train-steps", type=int, default=None, help="optimizer steps per iteration")
     parser.add_argument("--max-game-moves", type=int, default=None,
                         help="self-play ply safety ceiling (default 10000; not a soft target)")
@@ -1254,6 +1258,11 @@ def main() -> None:
         if float(args.c_puct) <= 0.0:
             raise ValueError("--c-puct must be > 0")
         cfg.mcts.c_puct = float(args.c_puct)
+    if args.dirichlet_epsilon is not None:
+        eps = float(args.dirichlet_epsilon)
+        if not 0.0 <= eps <= 1.0:
+            raise ValueError("--dirichlet-epsilon must be in [0, 1]")
+        cfg.mcts.dirichlet_epsilon = eps
     if args.concurrency is not None:
         cfg.train.selfplay_concurrency = args.concurrency
     if args.replay_window is not None:
@@ -1318,6 +1327,7 @@ def main() -> None:
         f"steps={cfg.train.train_steps_per_iteration} "
         f"sims={cfg.mcts.simulations} "
         f"c_puct={cfg.mcts.c_puct:.3f} "
+        f"dirichlet_epsilon={cfg.mcts.dirichlet_epsilon:.3f} "
         f"concurrency={cfg.train.selfplay_concurrency} "
         f"selfplay_workers={args.selfplay_workers} "
         f"central_inference={'on' if central_inference else 'off'} "

@@ -37,9 +37,10 @@ Gates run every 20 iters vs the checkpoint **20 iters ago**. Edit only the `TRAI
 | **481** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | games 128→160 (steps held); gate **500 vs 480** PASS (+63 Elo) |
 | **501** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | **`c_puct` 1.5→1.25** (gates keep 1.5); gate **520 vs 500** soft PASS (+41 Elo) |
 | **521** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | one TRAIN knob: **LR / lr_min 1.0e-4→7.5e-5**; hold games/sims/c_puct/buffer; gate **540 vs 520** hard PASS (+84 Elo) |
-| **541** | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | one TRAIN knob: **replay buffer/window 200k→150k**; HOLD LR/c_puct/games/sims; next gate **560 vs 540** |
+| **541** | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | one TRAIN knob: **replay buffer/window 200k→150k**; HOLD LR/c_puct/games/sims; gate **560 vs 540** INC (+27); lag **560 vs 520** PASS (+96) |
+| **561** | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | one TRAIN knob: **dirichlet_epsilon 0.25→0.30** (c2c4 first-move collapse); HOLD buffer/LR/c_puct/T; next gate **580 vs 560** |
 
-**Current row:** start **541** — resume from tip **540** (`latest.pt` / `ckpt_iter_0540.pt`), `value_target=root_q`, **`sims=200`**, games/steps **160/800**, **`c_puct=1.25`**, buffer/window **150k**, **LR 7.5e-5 flat**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Manual gate after the block: **560 vs 540** (optional lag **540 vs 500** first).
+**Current row:** start **561** — resume from tip **560** (`latest.pt` / `ckpt_iter_0560.pt`), `value_target=root_q`, **`sims=200`**, games/steps **160/800**, **`c_puct=1.25`**, buffer/window **150k**, **LR 7.5e-5 flat**, **`dirichlet_epsilon=0.30`**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Manual gate after the block: **580 vs 560** (optional **580 vs 540**).
 
 Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net only with a new `--checkpoint-dir`.
 
@@ -215,10 +216,16 @@ Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net o
 - **One TRAIN knob:** **LR / lr_min 1.0e-4 → 7.5e-5** (flat).
 - Gate **540 vs 520**: hard PASS (+84 Elo, CI LB +47). Kept.
 
-### Iter 541 — replay 150k (current)
+### Iter 541 — replay 150k
 
 - Resume from tip **540**. Hold games 160 / sims 200 / steps 800 / LR 7.5e-5 / `c_puct=1.25` / `root_q`.
 - **One TRAIN knob:** **replay buffer + window 200k → 150k** (fresher root_q labels).
-- Next manual gate: **560 vs 540**. Optional lag confirm: **540 vs 500**.
+- Gate **560 vs 540**: INCONCLUSIVE (+27 Elo). Lag **560 vs 520**: hard PASS (+96 Elo). Kept tip **560**.
+
+### Iter 561 — dirichlet_epsilon 0.30 (current)
+
+- Resume from tip **560**. Hold games 160 / sims 200 / steps 800 / buffer 150k / LR 7.5e-5 / `c_puct=1.25` / T=4 / plies=10 / `root_q`.
+- **One TRAIN knob:** self-play **`dirichlet_epsilon` 0.25→0.30** (root noise mix; gates keep `add_noise=False`). Response to c2c4 first-move collapse (~0.6→0.75 share).
+- Next manual gate: **580 vs 560** (optional **580 vs 540**). Abort if FM entropy keeps falling hard with Elo FAIL.
 
 Last updated: 2026-07-29.
