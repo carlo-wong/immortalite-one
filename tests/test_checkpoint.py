@@ -105,6 +105,13 @@ def test_load_sample_shard_skips_value_target_mismatch(tmp_path) -> None:
     assert len(_load_sample_shard(path, expected_value_target="root_q")) == 1
 
 
+def test_load_sample_shard_raises_on_unreadable(tmp_path) -> None:
+    path = tmp_path / "samples_iter_0099.npz"
+    path.write_bytes(b"not-a-valid-npz")
+    with pytest.raises(RuntimeError, match="unreadable shard"):
+        _load_sample_shard(str(path), expected_value_target="root_q")
+
+
 def test_require_value_target_compat_stamped_match() -> None:
     _require_value_target_compat("root_q", "root_q", source="ckpt")
 
