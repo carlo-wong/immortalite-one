@@ -36,7 +36,6 @@ STOP_INTERVAL = 20  # stop after completing iters 160, 180, 200, …
 TRAIN = {
     "sims": 200,  # self-play; gate stays 100
     "c_puct": 1.25,  # post-500 search retune; gates keep Config default 1.5
-    # Hold the checkpoint-560 root noise mix; test temperature as the only new knob.
     "dirichlet_epsilon": 0.25,
     "gate_sims": 100,  # manual gate (run_gate.py / run_train_and_gate.py) only
     "games": 160,  # post-480 freshness experiment; train_steps stays fixed
@@ -67,9 +66,11 @@ TRAIN = {
     "lr_total_iters": 10_000,
     "lr_warmup_iters": 0,
     "grad_clip": 10.0,
-    # One-knob rewind experiment: increase early-ply sampling temperature.
-    "move_temperature": 5.0,
+    # Hold 560 recipe temperature; break ply-0 lock with random prefix instead.
+    "move_temperature": 4.0,
     "move_temperature_plies": 10,
+    # One TRAIN knob: uniform-random first ply (SP only; zero human knowledge).
+    "random_opening_plies": 1,
 }
 RESET_OPTIMIZER = False
 RESIGN_THRESHOLD = -0.90
@@ -148,6 +149,7 @@ def main() -> None:
             "--grad-clip", str(TRAIN["grad_clip"]),
             "--move-temperature", str(TRAIN["move_temperature"]),
             "--move-temperature-plies", str(TRAIN["move_temperature_plies"]),
+            "--random-opening-plies", str(TRAIN["random_opening_plies"]),
             "--checkpoint-dir", paths.ckpt_dir,
             *resume_args,
         ]

@@ -39,9 +39,10 @@ Gates run every 20 iters vs the checkpoint **20 iters ago**. Edit only the `TRAI
 | **521** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | one TRAIN knob: **LR / lr_min 1.0e-4→7.5e-5**; hold games/sims/c_puct/buffer; gate **540 vs 520** hard PASS (+84 Elo) |
 | **541** | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | one TRAIN knob: **replay buffer/window 200k→150k**; HOLD LR/c_puct/games/sims; gate **560 vs 540** INC (+27); lag **560 vs 520** PASS (+96) |
 | **561**¶ | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | `dirichlet_epsilon` 0.25→0.30 — **discarded** (opening diversity worsened; 580 vs 560 null INC; iters 561–580 removed from metrics) |
-| **561** | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | rewind 560; one TRAIN knob: **`move_temperature` 4→5**; restore/hold `dirichlet_epsilon=0.25`; next gate **580 vs 560** |
+| **561**§ | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | `move_temperature` 4→5 — **discarded** (diversity still CRITICAL; 580 vs 560 INC +14; lag 580 vs 520 PASS +73 vs 560's +96 tip erosion) |
+| **561** | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | rewind 560; HOLD T=4 / ε=0.25; one TRAIN knob: **`random_opening_plies=1`** (uniform legal first ply, SP only); next gate **580 vs 560** |
 
-**Current row:** rewind to **561** from tip **560** (`latest.pt` / `ckpt_iter_0560.pt`), `value_target=root_q`, **`sims=200`**, games/steps **160/800**, **`c_puct=1.25`**, buffer/window **150k**, **LR 7.5e-5 flat**, **`dirichlet_epsilon=0.25`**, **`move_temperature=5`** for 10 plies, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Manual gate after the block: **580 vs 560**.
+**Current row:** rewind to **561** from tip **560** (`latest.pt` / `ckpt_iter_0560.pt`), `value_target=root_q`, **`sims=200`**, games/steps **160/800**, **`c_puct=1.25`**, buffer/window **150k**, **LR 7.5e-5 flat**, **`dirichlet_epsilon=0.25`**, **`move_temperature=4`** for 10 plies, **`random_opening_plies=1`**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Manual gate after the block: **580 vs 560** (+ lag **580 vs 520**).
 
 Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net only with a new `--checkpoint-dir`.
 
@@ -229,10 +230,17 @@ Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net o
 - **One TRAIN knob:** self-play **`dirichlet_epsilon` 0.25→0.30** (root noise mix; gates keep `add_noise=False`). Response to c2c4 first-move collapse (~0.6→0.75 share).
 - Opening diversity worsened: canonical 561–580 first-move entropy 1.356 and c2c4 share 0.684. Gate **580 vs 560** was null INCONCLUSIVE (+3 Elo). Discarded and rewound to 560.
 
-### Iter 561 — move temperature 5 (current)
+### Iter 561 — move temperature 5 (discarded)
 
 - Rewind to tip **560**. Restore/hold `dirichlet_epsilon=0.25`; hold games 160 / sims 200 / steps 800 / buffer 150k / LR 7.5e-5 / `c_puct=1.25` / plies=10 / `root_q`.
 - **One TRAIN knob:** early-ply self-play **`move_temperature` 4→5**. Policy targets remain untempered.
-- Check first-move diversity after iterations 563 and 565. Manual gate after the block: **580 vs 560**.
+- Result: first-move entropy improved vs the ε archive but stayed CRITICAL (H≈1.77, c2c4 20/20). Gate **580 vs 560** INC (+14 Elo). Lag **580 vs 520** PASS (+73 Elo) vs **560 vs 520** PASS (+96 Elo) — tip margin eroded ~23 Elo. Discarded; rewind tip **560**.
 
-Last updated: 2026-07-30.
+### Iter 561 — random opening prefix k=1 (current)
+
+- Rewind to tip **560**. HOLD `move_temperature=4`, `dirichlet_epsilon=0.25`, games 160 / sims 200 / steps 800 / buffer 150k / LR 7.5e-5 / `c_puct=1.25` / plies=10 / `root_q`.
+- **One TRAIN knob:** self-play **`random_opening_plies=1`** — each SP game starts with one uniform-random legal first move (zero human knowledge). Prefix plies write no training samples; MCTS starts after the prefix. Gates keep the masters book unchanged.
+- Diversity KPI: first *free* move (`moves[1]`, Black's first MCTS reply) logged in `metrics_first_moves.csv` (not the forced ply-0 move).
+- Early checks after +3 / +5 iters. Manual gate after the block: **580 vs 560**; lag hygiene **580 vs 520**.
+
+Last updated: 2026-07-31.

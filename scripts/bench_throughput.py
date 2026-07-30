@@ -454,7 +454,7 @@ def _run_central_trial(
     process_started = time.process_time()
     with ResourceMonitor(args.resource_interval) as monitor:
         started = time.perf_counter()
-        samples, terminations, lengths, _ = pool.run(
+        samples, terminations, lengths, _, _ = pool.run(
             _central_config(args, net_cfg),
             weights_path=None,
             simulations=args.sims,

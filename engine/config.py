@@ -86,6 +86,10 @@ class TrainConfig:
     # Early-ply move-selection temperature (sampling only; stored targets stay untempered).
     move_temperature: float = 1.0       # 1.0 = no tempering
     move_temperature_plies: int = 0     # 0 = disabled; apply T while move_count < this
+    # Self-play only: force the first N plies with uniform-random legal moves
+    # (zero human knowledge). Prefix plies write no training samples; MCTS starts
+    # after the prefix. Gates must keep this at 0 (they use their own book).
+    random_opening_plies: int = 0
     # KataGo-style write-time policy surprise weight alpha in [0, 1].
     # 0 = off (uniform). 0.5 = half uniform / half proportional to KL(target||prior).
     policy_surprise_data_weight: float = 0.0

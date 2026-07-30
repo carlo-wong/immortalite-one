@@ -1,7 +1,8 @@
-"""Recover and summarize White first-move distributions from self-play shards.
+"""Summarize first-move / first-free-move distributions for diversity logging.
 
-Matches startpos planes → next-position fingerprint (same approach as
-tmp/analyze_selfplay_first_moves.py). Used for per-iteration diversity logging.
+Live training logs the first *MCTS-chosen* UCI per game (skips forced
+``random_opening_plies``). Shard recovery below still reconstructs White's
+first move from startpos samples when present (legacy / no-prefix shards).
 """
 
 from __future__ import annotations

@@ -106,6 +106,7 @@ def main() -> None:
             "--grad-clip", str(TRAIN["grad_clip"]),
             "--move-temperature", str(TRAIN["move_temperature"]),
             "--move-temperature-plies", str(TRAIN["move_temperature_plies"]),
+            "--random-opening-plies", str(TRAIN["random_opening_plies"]),
             "--checkpoint-dir", paths.ckpt_dir,
             *resume_args,
         ]

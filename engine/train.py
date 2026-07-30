@@ -32,8 +32,8 @@ from .encoding import ENCODING_VERSION
 from .first_move_stats import (
     CSV_COLUMNS as FIRST_MOVE_CSV_COLUMNS,
     summarize_first_moves,
-    summarize_first_moves_from_shard,
 )
+from .openings import diversity_move_uci
 from .network import ChessNet, NetEvaluator
 from .inference import InferenceSettings
 from .sprt import (
@@ -600,6 +600,8 @@ def play_match(net_a: ChessNet, net_b: ChessNet, cfg: Config,
     # Never inherit self-play move temperature into strength gates.
     match_cfg.train.move_temperature = 1.0
     match_cfg.train.move_temperature_plies = 0
+    # Gates use their own opening book; never inherit SP random prefixes.
+    match_cfg.train.random_opening_plies = 0
     if concurrency is not None:
         match_cfg.train.selfplay_concurrency = concurrency
 
@@ -1206,6 +1208,11 @@ def main() -> None:
                         help="early-ply move sampling temperature (1.0 = off)")
     parser.add_argument("--move-temperature-plies", type=int, default=0,
                         help="apply move temperature for first N plies (0 = disabled)")
+    parser.add_argument(
+        "--random-opening-plies", type=int, default=None,
+        help="self-play only: force first N plies with uniform-random legal moves "
+             "(0=off; prefix writes no training samples; gates keep their own book)",
+    )
     args = parser.parse_args()
 
     # Fall back to CPU if CUDA was requested but isn't available in this runtime.
@@ -1309,6 +1316,8 @@ def main() -> None:
         cfg.train.resign_min_moves = args.resign_min_moves
     cfg.train.move_temperature = float(args.move_temperature)
     cfg.train.move_temperature_plies = max(0, int(args.move_temperature_plies))
+    if args.random_opening_plies is not None:
+        cfg.train.random_opening_plies = max(0, int(args.random_opening_plies))
     args.gate_exploration_moves = max(0, int(args.gate_exploration_moves))
     from engine.openings import load_default_gate_openings, load_opening_book
 
@@ -1348,6 +1357,7 @@ def main() -> None:
         f"resign_min_moves={cfg.train.resign_min_moves} "
         f"move_temperature={cfg.train.move_temperature:.3f} "
         f"move_temperature_plies={cfg.train.move_temperature_plies} "
+        f"random_opening_plies={cfg.train.random_opening_plies} "
         f"gate_games={args.gate_games} "
         f"gate_sims={args.gate_sims if args.gate_sims is not None else 'match-selfplay'} "
         f"gate_exploration_moves={args.gate_exploration_moves} "
@@ -1463,7 +1473,8 @@ def main() -> None:
             termination_counts: Counter[str] = Counter()
             game_lengths: list[int] = []
             game_outcomes: list[int] = []
-            first_moves: list[str] = []
+            diversity_moves: list[str] = []
+            prefix_plies = int(cfg.train.random_opening_plies)
             n_games = cfg.train.games_per_iteration
             game_bar = tqdm(total=n_games, desc=f"iter {it} self-play", unit="game", leave=False)
 
@@ -1484,8 +1495,9 @@ def main() -> None:
                 new_samples += len(train_samples)
                 termination_counts[game.termination] += 1
                 game_outcomes.append(_winner_of(game))
-                if game.moves:
-                    first_moves.append(game.moves[0])
+                free = diversity_move_uci(game.moves, prefix_plies)
+                if free:
+                    diversity_moves.append(free)
                 game_bar.set_postfix(moves=len(game.samples), buffer=len(buffer))
                 game_bar.update(1)
 
@@ -1500,15 +1512,19 @@ def main() -> None:
                 def _parallel_selfplay_progress(completed: int) -> None:
                     _tqdm_sync_progress(game_bar, completed)
 
-                parallel_samples, parallel_terms, parallel_lengths, parallel_outcomes = (
-                    selfplay_pool.run(
-                        cfg,
-                        worker_weights_path,
-                        simulations=sims,
-                        num_games=n_games,
-                        on_progress=_parallel_selfplay_progress,
-                        evaluator=evaluator if central_inference else None,
-                    )
+                (
+                    parallel_samples,
+                    parallel_terms,
+                    parallel_lengths,
+                    parallel_outcomes,
+                    parallel_diversity,
+                ) = selfplay_pool.run(
+                    cfg,
+                    worker_weights_path,
+                    simulations=sims,
+                    num_games=n_games,
+                    on_progress=_parallel_selfplay_progress,
+                    evaluator=evaluator if central_inference else None,
                 )
                 buffer.extend(parallel_samples)
                 iteration_samples = parallel_samples
@@ -1517,6 +1533,7 @@ def main() -> None:
                 termination_counts = Counter(parallel_terms)
                 game_lengths = parallel_lengths
                 game_outcomes = parallel_outcomes
+                diversity_moves = list(parallel_diversity)
                 _tqdm_sync_progress(game_bar, n_games)
             else:
                 play_games_batched(
@@ -1539,15 +1556,7 @@ def main() -> None:
                 iteration_samples,
                 value_target=cfg.train.value_target,
             )
-            if args.selfplay_workers > 1:
-                shard_path = _sample_shard_path(cfg.train.checkpoint_dir, it)
-                fm_stats = (
-                    summarize_first_moves_from_shard(shard_path)
-                    if os.path.isfile(shard_path)
-                    else summarize_first_moves([])
-                )
-            else:
-                fm_stats = summarize_first_moves(first_moves)
+            fm_stats = summarize_first_moves(diversity_moves)
             _log_first_move_metrics(cfg.train.checkpoint_dir, it, fm_stats)
 
             net.train()

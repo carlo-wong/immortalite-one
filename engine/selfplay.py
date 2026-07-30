@@ -32,10 +32,19 @@ from .mcts import (
     _root_from_native_tree,
 )
 from .network import ChessNet, NetEvaluator
+from .openings import diversity_move_uci, random_legal_opening_prefixes
 from .profile import ProfileCounters
 
 _EXPLORATION_MOVES = 20  # sample from the policy for this many plies, then argmax
 GATE_OPENING_PLIES = 8
+
+
+def _selfplay_start_moves(cfg: Config, num_games: int) -> list[list[str]] | None:
+    """Build per-game forced prefixes for self-play, or None when disabled."""
+    plies = int(cfg.train.random_opening_plies)
+    if plies <= 0 or num_games <= 0:
+        return None
+    return random_legal_opening_prefixes(num_games, plies)
 
 
 def _prefer_native_selfplay() -> bool:
@@ -555,11 +564,13 @@ def play_games_batched_native_actors(
     if hasattr(evaluator, "profile"):
         evaluator.profile = profile
 
+    start_moves = _selfplay_start_moves(cfg, num_games)
     batch = native.GameActorBatch(
         num_games,
         _native_actor_config(cfg, simulations, add_noise, exploration_moves),
         _mcts_cfg_dict(cfg),
         int(np.random.randint(0, 2**31 - 1)),
+        start_moves if start_moves is not None else None,
     )
     completed: list[GameResult] = []
     while len(completed) < num_games:
@@ -923,13 +934,17 @@ def play_games_batched(evaluator: NetEvaluator, cfg: Config, simulations: int,
             profile=profile,
         )
 
+    start_moves = _selfplay_start_moves(cfg, num_games)
     active: list[_ActiveGame] = []
     launched = 0
     completed: list[GameResult] = []
 
     while len(completed) < num_games:
         while launched < num_games and len(active) < concurrency:
-            gen = play_game_gen(cfg, simulations, tablebase=tablebase)
+            prefix = None if start_moves is None else start_moves[launched]
+            gen = play_game_gen(
+                cfg, simulations, tablebase=tablebase, start_moves=prefix,
+            )
             active.append(_ActiveGame(gen=gen, pending=next(gen)))
             launched += 1
 
@@ -1016,6 +1031,7 @@ def _config_to_dict(cfg: Config) -> dict:
             "value_coef": cfg.train.value_coef,
             "move_temperature": cfg.train.move_temperature,
             "move_temperature_plies": cfg.train.move_temperature_plies,
+            "random_opening_plies": cfg.train.random_opening_plies,
             "policy_surprise_data_weight": cfg.train.policy_surprise_data_weight,
         },
     }
@@ -1075,6 +1091,7 @@ def _selfplay_worker_run(payload: dict) -> tuple[
     dict[str, int],
     list[int],
     list[int],
+    list[str],
 ]:
     """Reload weights and play games using the process-local compiled net."""
     n_games = int(payload["n_games"])
@@ -1110,7 +1127,9 @@ def _selfplay_worker_run(payload: dict) -> tuple[
     termination_counts: Counter[str] = Counter()
     game_lengths: list[int] = []
     game_outcomes: list[int] = []
+    diversity_moves: list[str] = []
     games_done = payload.get("games_done")
+    prefix_plies = int(cfg.train.random_opening_plies)
 
     def _on_game(game: GameResult) -> None:
         # Length metrics stay 1:1 with plies; surprise replication is train-only.
@@ -1121,6 +1140,9 @@ def _selfplay_worker_run(payload: dict) -> tuple[
         samples.extend(train_samples)
         termination_counts[game.termination] += 1
         game_outcomes.append(_winner_of_worker(game))
+        free = diversity_move_uci(game.moves, prefix_plies)
+        if free:
+            diversity_moves.append(free)
         if games_done is not None:
             games_done.value += 1
 
@@ -1133,7 +1155,7 @@ def _selfplay_worker_run(payload: dict) -> tuple[
         on_game_finished=_on_game,
         tablebase=tablebase,
     )
-    return samples, dict(termination_counts), game_lengths, game_outcomes
+    return samples, dict(termination_counts), game_lengths, game_outcomes, diversity_moves
 
 
 def _selfplay_worker(payload: dict) -> tuple[
@@ -1141,6 +1163,7 @@ def _selfplay_worker(payload: dict) -> tuple[
     dict[str, int],
     list[int],
     list[int],
+    list[str],
 ]:
     """One-shot worker: init net/compile, play, tear down (ephemeral pool path)."""
     net_cfg = payload["net_cfg"]
@@ -1166,18 +1189,20 @@ def _winner_of_worker(game: GameResult) -> int:
 
 
 def _merge_worker_results(
-    results: list[tuple[list[Sample], dict[str, int], list[int], list[int]]],
-) -> tuple[list[Sample], Counter[str], list[int], list[int]]:
+    results: list[tuple[list[Sample], dict[str, int], list[int], list[int], list[str]]],
+) -> tuple[list[Sample], Counter[str], list[int], list[int], list[str]]:
     all_samples: list[Sample] = []
     termination_counts: Counter[str] = Counter()
     game_lengths: list[int] = []
     game_outcomes: list[int] = []
-    for samples, term_dict, lengths, outcomes in results:
+    diversity_moves: list[str] = []
+    for samples, term_dict, lengths, outcomes, moves in results:
         all_samples.extend(samples)
         termination_counts.update(term_dict)
         game_lengths.extend(lengths)
         game_outcomes.extend(outcomes)
-    return all_samples, termination_counts, game_lengths, game_outcomes
+        diversity_moves.extend(moves)
+    return all_samples, termination_counts, game_lengths, game_outcomes, diversity_moves
 
 
 def _net_cfg_dict(net_cfg: NetConfig) -> dict:
@@ -1248,11 +1273,11 @@ class SelfplayWorkerPool:
         num_games: int,
         on_progress: Callable[[int], None] | None = None,
         evaluator: NetEvaluator | None = None,
-    ) -> tuple[list[Sample], Counter[str], list[int], list[int]]:
+    ) -> tuple[list[Sample], Counter[str], list[int], list[int], list[str]]:
         if self._closed:
             raise RuntimeError("SelfplayWorkerPool is closed")
         if num_games <= 0:
-            return [], Counter(), [], []
+            return [], Counter(), [], [], []
 
         game_counts = _split_games(num_games, self.workers)
         if self.centralized and evaluator is None:
@@ -1330,10 +1355,10 @@ def play_games_parallel(
     device: str,
     syzygy_path: str | None = None,
     on_progress: Callable[[int], None] | None = None,
-) -> tuple[list[Sample], Counter[str], list[int], list[int]]:
+) -> tuple[list[Sample], Counter[str], list[int], list[int], list[str]]:
     """One-shot parallel self-play (ephemeral pool). Prefer SelfplayWorkerPool in train."""
     if num_games <= 0:
-        return [], Counter(), [], []
+        return [], Counter(), [], [], []
     if workers <= 1:
         raise ValueError("play_games_parallel requires workers > 1")
 
