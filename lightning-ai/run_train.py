@@ -36,8 +36,8 @@ STOP_INTERVAL = 20  # stop after completing iters 160, 180, 200, …
 TRAIN = {
     "sims": 200,  # self-play; gate stays 100
     "c_puct": 1.25,  # post-500 search retune; gates keep Config default 1.5
-    # Self-play root noise mix; raise after c2c4 first-move collapse (gates: add_noise=False).
-    "dirichlet_epsilon": 0.30,
+    # Hold the checkpoint-560 root noise mix; test temperature as the only new knob.
+    "dirichlet_epsilon": 0.25,
     "gate_sims": 100,  # manual gate (run_gate.py / run_train_and_gate.py) only
     "games": 160,  # post-480 freshness experiment; train_steps stays fixed
     "train_steps": 800,
@@ -67,8 +67,8 @@ TRAIN = {
     "lr_total_iters": 10_000,
     "lr_warmup_iters": 0,
     "grad_clip": 10.0,
-    # Early-ply move sampling temperature (policy targets stay untempered).
-    "move_temperature": 4.0,
+    # One-knob rewind experiment: increase early-ply sampling temperature.
+    "move_temperature": 5.0,
     "move_temperature_plies": 10,
 }
 RESET_OPTIMIZER = False
