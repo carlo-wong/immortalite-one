@@ -89,6 +89,8 @@ def main() -> None:
             "--replay-buffer", str(TRAIN["replay_buffer"]),
             "--replay-window", str(TRAIN["replay_window"]),
             "--sims", str(TRAIN["sims"]),
+            "--c-puct", str(TRAIN["c_puct"]),
+            "--dirichlet-epsilon", str(TRAIN["dirichlet_epsilon"]),
             "--draw-penalty", str(TRAIN["draw_penalty"]),
             "--value-target", str(TRAIN["value_target"]),
             "--value-q-ratio", str(TRAIN["value_q_ratio"]),

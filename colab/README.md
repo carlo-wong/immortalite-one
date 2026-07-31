@@ -47,7 +47,7 @@ Current recipe: iter **361+** — same as `lightning-ai/run_train.py` except wor
 |-----|-------|-------|
 | `sims` | **200** | self-play MCTS sims/move (gate stays 100) |
 | `move_temperature` / `move_temperature_plies` | **4.0** / **10** | early-ply sampling only; targets untempered |
-| `random_opening_plies` | **1** | uniform legal first ply (SP only; zero human knowledge) |
+| `random_opening_plies` | **0** | tip-540 / 521–540 recipe (prefix experiment discarded) |
 | `value_target` | **root_q** | per-ply MCTS Q |
 | `value_coef` | **1.0** | equal policy/value weight (1.5 stall; rewind 400) |
 | `policy_surprise_data_weight` | **0.0** | surprise 0.5 failed; leave off |
@@ -55,10 +55,10 @@ Current recipe: iter **361+** — same as `lightning-ai/run_train.py` except wor
 | `train_steps` | **800** | |
 | `concurrency` | 128 | batched MCTS eval width (one GPU owner) |
 | `selfplay_workers` / `gate_workers` | **2** / **2** | self-play: central inference; gates: see note below |
-| `replay_buffer` / `replay_window` | **150k** | ~8 iters at 160 games |
+| `replay_buffer` / `replay_window` | **200k** | tip-540 / 521–540 recipe |
 | `draw_penalty` | 1/3 | football 3-1-0 shaping |
 | `resign` | False | off |
-| `lr` / `lr_min` | **7.5e-5** | flat (row 521+) |
+| `lr` / `lr_min` | **5e-5** | flat (row 541+; tip 540 rewind) |
 | `gate_games` / `gate_sims` | **256 / 100** | manual gate cell 6 only |
 | `gate_concurrency` | **256** | gate parallelization knob (native path) |
 | `gate_exploration_moves` | **0** | after masters book (no temperature) |

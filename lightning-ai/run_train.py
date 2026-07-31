@@ -42,8 +42,8 @@ TRAIN = {
     "train_steps": 800,
     "concurrency": 160,
     "selfplay_workers": 4,  # Lightning T4 vCPUs; CUDA central inference auto-enables
-    "replay_buffer": 150_000,
-    "replay_window": 150_000,
+    "replay_buffer": 200_000,
+    "replay_window": 200_000,
     "draw_penalty": 1 / 3,
     # Per-ply MCTS root Q labels; gates still use WDL.
     "value_target": "root_q",
@@ -61,16 +61,15 @@ TRAIN = {
     "save_every": 10,
     "resume": True,
     "resign": False,
-    "lr": 7.5e-5,
-    "lr_min": 7.5e-5,
+    "lr": 5e-5,
+    "lr_min": 5e-5,
     "lr_total_iters": 10_000,
     "lr_warmup_iters": 0,
     "grad_clip": 10.0,
-    # Hold 560 recipe temperature; break ply-0 lock with random prefix instead.
+    # Tip 540 rewind: buffer 200k, prefix off; one knob LR 5e-5.
     "move_temperature": 4.0,
     "move_temperature_plies": 10,
-    # One TRAIN knob: uniform-random first ply (SP only; zero human knowledge).
-    "random_opening_plies": 1,
+    "random_opening_plies": 0,
 }
 RESET_OPTIMIZER = False
 RESIGN_THRESHOLD = -0.90

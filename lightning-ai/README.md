@@ -86,22 +86,22 @@ Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T
 
 | Key | Value |
 |-----|-------|
-| `sims` | **200** (self-play; was 150) |
-| `games` | 128 |
+| `sims` | **200** (self-play; gate stays 100) |
+| `games` | **160** |
 | `train_steps` | **800** |
-| `concurrency` | 128 |
+| `concurrency` | **160** |
 | `selfplay_workers` / `gate_workers` | 4 / 4 |
 | `value_target` | `root_q` |
 | `value_coef` | **1.0** (loss = π + v) |
 | `policy_surprise_data_weight` | **0.0** (0.5 failed; off) |
 | `move_temperature` / `move_temperature_plies` | **4.0** / **10** (sampling only) |
-| `random_opening_plies` | **1** (uniform legal first ply; SP only) |
+| `random_opening_plies` | **0** |
 | `resign` | off |
-| `replay_buffer` / `replay_window` | **150k** |
+| `replay_buffer` / `replay_window` | **200k** |
 | `gate_games` / `gate_sims` | **256** / **100** (gates stay 100) |
 | `gate_concurrency` | **256** (native gate parallelization) |
 | `gate_exploration_moves` / `gate_openings` | 0 / masters (128×2 colors) |
-| `lr` / `lr_min` | **7.5e-5** flat |
+| `lr` / `lr_min` | **5e-5** flat |
 | Training span | auto-stops at iters 360, 380, … (multiples of 20) |
 | `RESET_OPTIMIZER` | `False` |
 

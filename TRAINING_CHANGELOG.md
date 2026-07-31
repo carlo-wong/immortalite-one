@@ -37,12 +37,13 @@ Gates run every 20 iters vs the checkpoint **20 iters ago**. Edit only the `TRAI
 | **481** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | games 128→160 (steps held); gate **500 vs 480** PASS (+63 Elo) |
 | **501** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **1.0e-4 flat** | **`c_puct` 1.5→1.25** (gates keep 1.5); gate **520 vs 500** soft PASS (+41 Elo) |
 | **521** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | one TRAIN knob: **LR / lr_min 1.0e-4→7.5e-5**; hold games/sims/c_puct/buffer; gate **540 vs 520** hard PASS (+84 Elo) |
-| **541** | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | one TRAIN knob: **replay buffer/window 200k→150k**; HOLD LR/c_puct/games/sims; gate **560 vs 540** INC (+27); lag **560 vs 520** PASS (+96) |
-| **561**¶ | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | `dirichlet_epsilon` 0.25→0.30 — **discarded** (opening diversity worsened; 580 vs 560 null INC; iters 561–580 removed from metrics) |
-| **561**§ | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | `move_temperature` 4→5 — **discarded** (diversity still CRITICAL; 580 vs 560 INC +14; lag 580 vs 520 PASS +73 vs 560's +96 tip erosion) |
-| **561** | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | rewind 560; HOLD T=4 / ε=0.25; one TRAIN knob: **`random_opening_plies=1`** (uniform legal first ply, SP only); next gate **580 vs 560** |
+| **541**¶ | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | buffer/window 200k→150k — **discarded** (White first-move collapse; c2c4→~0.61 at tip 560; iters 541–580 removed from metrics) |
+| **561**¶ | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | `dirichlet_epsilon` 0.25→0.30 — **discarded** (diversity worsened; archived) |
+| **561**§ | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | `move_temperature` 4→5 — **discarded** (diversity still CRITICAL; lag tip erosion vs 520) |
+| **561**‖ | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | `random_opening_plies=1` — **discarded** (startpos sample starvation; gate 580 vs 560 −20 Elo INC) |
+| **541** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | rewind tip **540**; restore buffer **200k** / `random_opening_plies=0`; one TRAIN knob: **LR / lr_min 7.5e-5→5e-5**; next gate **560 vs 540** |
 
-**Current row:** rewind to **561** from tip **560** (`latest.pt` / `ckpt_iter_0560.pt`), `value_target=root_q`, **`sims=200`**, games/steps **160/800**, **`c_puct=1.25`**, buffer/window **150k**, **LR 7.5e-5 flat**, **`dirichlet_epsilon=0.25`**, **`move_temperature=4`** for 10 plies, **`random_opening_plies=1`**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Manual gate after the block: **580 vs 560** (+ lag **580 vs 520**).
+**Current row:** rewind to tip **540** (`latest.pt` / `ckpt_iter_0540.pt`), `value_target=root_q`, **`sims=200`**, games/steps **160/800**, **`c_puct=1.25`**, buffer/window **200k**, **LR 5e-5 flat**, **`dirichlet_epsilon=0.25`**, **`move_temperature=4`** for 10 plies, **`random_opening_plies=0`**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Manual gate after the block: **560 vs 540** (+ lag **560 vs 520** if INC).
 
 Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net only with a new `--checkpoint-dir`.
 
@@ -218,29 +219,30 @@ Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net o
 - **One TRAIN knob:** **LR / lr_min 1.0e-4 → 7.5e-5** (flat).
 - Gate **540 vs 520**: hard PASS (+84 Elo, CI LB +47). Kept.
 
-### Iter 541 — replay 150k
+### Iter 541 — replay 150k (discarded)
 
 - Resume from tip **540**. Hold games 160 / sims 200 / steps 800 / LR 7.5e-5 / `c_puct=1.25` / `root_q`.
 - **One TRAIN knob:** **replay buffer + window 200k → 150k** (fresher root_q labels).
-- Gate **560 vs 540**: INCONCLUSIVE (+27 Elo). Lag **560 vs 520**: hard PASS (+96 Elo). Kept tip **560**.
+- Gate **560 vs 540**: INCONCLUSIVE (+27 Elo). Lag **560 vs 520**: hard PASS (+96 Elo).
+- Opening diversity collapsed during the block (White first-move H ≈ 1.62, c2c4 ≈ 0.61 at tip 560 vs healthy H ≈ 2.29 / c2c4 ≈ 0.04 in 521–540). Discarded; rewind tip **540**, restore buffer **200k**. Metrics rows 541–580 cleared.
 
 ### Iter 561 — dirichlet_epsilon 0.30 (discarded)
 
-- Resume from tip **560**. Hold games 160 / sims 200 / steps 800 / buffer 150k / LR 7.5e-5 / `c_puct=1.25` / T=4 / plies=10 / `root_q`.
-- **One TRAIN knob:** self-play **`dirichlet_epsilon` 0.25→0.30** (root noise mix; gates keep `add_noise=False`). Response to c2c4 first-move collapse (~0.6→0.75 share).
-- Opening diversity worsened: canonical 561–580 first-move entropy 1.356 and c2c4 share 0.684. Gate **580 vs 560** was null INCONCLUSIVE (+3 Elo). Discarded and rewound to 560.
+- Ran from tip **560** under the 150k-buffer recipe. Diversity worsened (H ≈ 1.36, c2c4 ≈ 0.68). Archived with the 541+ scrap.
 
 ### Iter 561 — move temperature 5 (discarded)
 
-- Rewind to tip **560**. Restore/hold `dirichlet_epsilon=0.25`; hold games 160 / sims 200 / steps 800 / buffer 150k / LR 7.5e-5 / `c_puct=1.25` / plies=10 / `root_q`.
-- **One TRAIN knob:** early-ply self-play **`move_temperature` 4→5**. Policy targets remain untempered.
-- Result: first-move entropy improved vs the ε archive but stayed CRITICAL (H≈1.77, c2c4 20/20). Gate **580 vs 560** INC (+14 Elo). Lag **580 vs 520** PASS (+73 Elo) vs **560 vs 520** PASS (+96 Elo) — tip margin eroded ~23 Elo. Discarded; rewind tip **560**.
+- Ran from tip **560**. Diversity still CRITICAL; lag 580 vs 520 +73 vs 560's +96 tip erosion. Archived with the 541+ scrap.
 
-### Iter 561 — random opening prefix k=1 (current)
+### Iter 561 — random opening prefix k=1 (discarded)
 
-- Rewind to tip **560**. HOLD `move_temperature=4`, `dirichlet_epsilon=0.25`, games 160 / sims 200 / steps 800 / buffer 150k / LR 7.5e-5 / `c_puct=1.25` / plies=10 / `root_q`.
-- **One TRAIN knob:** self-play **`random_opening_plies=1`** — each SP game starts with one uniform-random legal first move (zero human knowledge). Prefix plies write no training samples; MCTS starts after the prefix. Gates keep the masters book unchanged.
-- Diversity KPI: first *free* move (`moves[1]`, Black's first MCTS reply) logged in `metrics_first_moves.csv` (not the forced ply-0 move).
-- Early checks after +3 / +5 iters. Manual gate after the block: **580 vs 560**; lag hygiene **580 vs 520**.
+- Ran from tip **560**. Prefix wrote no training samples → White startpos starvation. Gate **580 vs 560** −20 Elo INC. Archived with the 541+ scrap.
+
+### Iter 541 — rewind tip 540 + LR 5e-5 (current)
+
+- Restore **`ckpt_iter_0540.pt`** as `latest.pt`. Discard buffer-150k / ε / T=5 / opening-prefix branches (metrics cleared past 540).
+- Hold games 160 / sims 200 / steps 800 / buffer **200k** / `c_puct=1.25` / T=4 / plies=10 / ε=0.25 / `random_opening_plies=0` / `root_q`.
+- **One TRAIN knob:** **LR / lr_min 7.5e-5 → 5e-5** (flat).
+- Watch White first-move diversity (abort if H ≲ 2.0 or c2c4 ≳ 0.40 sustained). Manual gate after the block: **560 vs 540**; lag hygiene **560 vs 520** if INC.
 
 Last updated: 2026-07-31.
