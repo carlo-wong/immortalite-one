@@ -36,6 +36,8 @@ STOP_INTERVAL = 20  # stop after completing iters 160, 180, 200, …
 TRAIN = {
     "sims": 200,  # self-play; gate stays 100
     "c_puct": 1.25,  # post-500 search retune; gates keep Config default 1.5
+    # Sole 561–580 knob: sparser per-game root noise to resist c2c4 lock.
+    "dirichlet_alpha": 0.15,
     "dirichlet_epsilon": 0.25,
     "gate_sims": 100,  # manual gate (run_gate.py / run_train_and_gate.py) only
     "games": 160,  # post-480 freshness experiment; train_steps stays fixed
@@ -66,7 +68,7 @@ TRAIN = {
     "lr_total_iters": 10_000,
     "lr_warmup_iters": 0,
     "grad_clip": 10.0,
-    # Tip 540 rewind: buffer 200k, prefix off; one knob LR 5e-5.
+    # Resume tip 560; hold LR/buffer/prefix while testing alpha 0.15.
     "move_temperature": 4.0,
     "move_temperature_plies": 10,
     "random_opening_plies": 0,
@@ -130,6 +132,7 @@ def main() -> None:
             "--replay-window", str(TRAIN["replay_window"]),
             "--sims", str(TRAIN["sims"]),
             "--c-puct", str(TRAIN["c_puct"]),
+            "--dirichlet-alpha", str(TRAIN["dirichlet_alpha"]),
             "--dirichlet-epsilon", str(TRAIN["dirichlet_epsilon"]),
             "--draw-penalty", str(TRAIN["draw_penalty"]),
             "--value-target", str(TRAIN["value_target"]),

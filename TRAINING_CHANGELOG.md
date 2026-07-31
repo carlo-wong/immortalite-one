@@ -42,8 +42,9 @@ Gates run every 20 iters vs the checkpoint **20 iters ago**. Edit only the `TRAI
 | **561**§ | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | `move_temperature` 4→5 — **discarded** (diversity still CRITICAL; lag tip erosion vs 520) |
 | **561**‖ | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | `random_opening_plies=1` — **discarded** (startpos sample starvation; gate 580 vs 560 −20 Elo INC) |
 | **541** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | rewind tip **540**; restore buffer **200k** / `random_opening_plies=0`; one TRAIN knob: **LR / lr_min 7.5e-5→5e-5**; next gate **560 vs 540** |
+| **561** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | resume tip **560**; one TRAIN knob: `dirichlet_alpha` **0.30→0.15** (ε held 0.25) after unchanged canary c2c4 approached 0.70 and was discarded; gate **580 vs 560** |
 
-**Current row:** rewind to tip **540** (`latest.pt` / `ckpt_iter_0540.pt`), `value_target=root_q`, **`sims=200`**, games/steps **160/800**, **`c_puct=1.25`**, buffer/window **200k**, **LR 5e-5 flat**, **`dirichlet_epsilon=0.25`**, **`move_temperature=4`** for 10 plies, **`random_opening_plies=0`**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Manual gate after the block: **560 vs 540** (+ lag **560 vs 520** if INC).
+**Current row:** resume tip **560** (`latest.pt` / `ckpt_iter_0560.pt`), `value_target=root_q`, **`sims=200`**, games/steps **160/800**, **`c_puct=1.25`**, buffer/window **200k**, **LR 5e-5 flat**, **`dirichlet_alpha=0.15`**, **`dirichlet_epsilon=0.25`**, **`move_temperature=4`** for 10 plies, **`random_opening_plies=0`**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Canary through 565; manual gate after the block: **580 vs 560**.
 
 Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net only with a new `--checkpoint-dir`.
 

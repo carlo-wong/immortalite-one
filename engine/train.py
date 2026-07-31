@@ -107,6 +107,13 @@ def _lr_for_iteration(cfg: Config, it: int) -> float:
     return min_lr + (peak_lr - min_lr) * cosine
 
 
+def _positive_dirichlet_alpha(value: str) -> float:
+    alpha = float(value)
+    if alpha <= 0.0:
+        raise argparse.ArgumentTypeError("--dirichlet-alpha must be > 0")
+    return alpha
+
+
 def _finite_median(values: list[float]) -> float:
     finite = [v for v in values if math.isfinite(v)]
     if not finite:
@@ -1122,6 +1129,10 @@ def main() -> None:
         "--dirichlet-epsilon", type=float, default=None,
         help="root Dirichlet noise mix for self-play (0=off noise mix; gates use add_noise=False)",
     )
+    parser.add_argument(
+        "--dirichlet-alpha", type=_positive_dirichlet_alpha, default=None,
+        help="root Dirichlet concentration for self-play (>0; lower is sparser)",
+    )
     parser.add_argument("--train-steps", type=int, default=None, help="optimizer steps per iteration")
     parser.add_argument("--max-game-moves", type=int, default=None,
                         help="self-play ply safety ceiling (default 10000; not a soft target)")
@@ -1270,6 +1281,8 @@ def main() -> None:
         if not 0.0 <= eps <= 1.0:
             raise ValueError("--dirichlet-epsilon must be in [0, 1]")
         cfg.mcts.dirichlet_epsilon = eps
+    if args.dirichlet_alpha is not None:
+        cfg.mcts.dirichlet_alpha = args.dirichlet_alpha
     if args.concurrency is not None:
         cfg.train.selfplay_concurrency = args.concurrency
     if args.replay_window is not None:
@@ -1336,6 +1349,7 @@ def main() -> None:
         f"steps={cfg.train.train_steps_per_iteration} "
         f"sims={cfg.mcts.simulations} "
         f"c_puct={cfg.mcts.c_puct:.3f} "
+        f"dirichlet_alpha={cfg.mcts.dirichlet_alpha:.3f} "
         f"dirichlet_epsilon={cfg.mcts.dirichlet_epsilon:.3f} "
         f"concurrency={cfg.train.selfplay_concurrency} "
         f"selfplay_workers={args.selfplay_workers} "

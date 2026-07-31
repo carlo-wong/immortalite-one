@@ -90,6 +90,7 @@ def main() -> None:
             "--replay-window", str(TRAIN["replay_window"]),
             "--sims", str(TRAIN["sims"]),
             "--c-puct", str(TRAIN["c_puct"]),
+            "--dirichlet-alpha", str(TRAIN["dirichlet_alpha"]),
             "--dirichlet-epsilon", str(TRAIN["dirichlet_epsilon"]),
             "--draw-penalty", str(TRAIN["draw_penalty"]),
             "--value-target", str(TRAIN["value_target"]),
