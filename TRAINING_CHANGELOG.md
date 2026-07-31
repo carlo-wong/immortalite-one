@@ -42,9 +42,10 @@ Gates run every 20 iters vs the checkpoint **20 iters ago**. Edit only the `TRAI
 | **561**§ | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | `move_temperature` 4→5 — **discarded** (diversity still CRITICAL; lag tip erosion vs 520) |
 | **561**‖ | **160** | **800** | **160** | **2**/4 | **150k** | **256 games** (Elo CI), **gate_sims=100** | **7.5e-5 flat** | `random_opening_plies=1` — **discarded** (startpos sample starvation; gate 580 vs 560 −20 Elo INC) |
 | **541** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | rewind tip **540**; restore buffer **200k** / `random_opening_plies=0`; one TRAIN knob: **LR / lr_min 7.5e-5→5e-5**; next gate **560 vs 540** |
-| **561** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | resume tip **560**; one TRAIN knob: `dirichlet_alpha` **0.30→0.15** (ε held 0.25) after unchanged canary c2c4 approached 0.70 and was discarded; gate **580 vs 560** |
+| **561**¶¶ | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | `dirichlet_alpha` **0.30→0.15** (ε held 0.25) — **discarded** (diversity CRITICAL: H≈1.64 / c2c4≈0.59 / 20/20 top1; gate **580 vs 560** +12 Elo INC; metrics 561–580 cleared) |
+| **561** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | resume tip **560**; restore `dirichlet_alpha` **0.30** (**hygiene**, not a new knob); HOLD LR **5e-5** / sims **200** / buffer **200k**; washout canary then recovery block; next gate **580 vs 560** |
 
-**Current row:** resume tip **560** (`latest.pt` / `ckpt_iter_0560.pt`), `value_target=root_q`, **`sims=200`**, games/steps **160/800**, **`c_puct=1.25`**, buffer/window **200k**, **LR 5e-5 flat**, **`dirichlet_alpha=0.15`**, **`dirichlet_epsilon=0.25`**, **`move_temperature=4`** for 10 plies, **`random_opening_plies=0`**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Canary through 565; manual gate after the block: **580 vs 560**.
+**Current row:** resume tip **560** (`latest.pt` / `ckpt_iter_0560.pt`), `value_target=root_q`, **`sims=200`**, games/steps **160/800**, **`c_puct=1.25`**, buffer/window **200k**, **LR 5e-5 flat**, **`dirichlet_alpha=0.30`** (restore after discarded alpha=0.15 tip), **`dirichlet_epsilon=0.25`**, **`move_temperature=4`** for 10 plies, **`random_opening_plies=0`**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. **No new TRAIN knob** — alpha restore is discard hygiene. Canary through 565 (abort if mean c2c4 ≥ 0.60 / H ≤ 1.70 sustained); manual gate after the block: **580 vs 560**.
 
 Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net only with a new `--checkpoint-dir`.
 
@@ -239,11 +240,26 @@ Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net o
 
 - Ran from tip **560**. Prefix wrote no training samples → White startpos starvation. Gate **580 vs 560** −20 Elo INC. Archived with the 541+ scrap.
 
-### Iter 541 — rewind tip 540 + LR 5e-5 (current)
+### Iter 541 — rewind tip 540 + LR 5e-5
 
 - Restore **`ckpt_iter_0540.pt`** as `latest.pt`. Discard buffer-150k / ε / T=5 / opening-prefix branches (metrics cleared past 540).
 - Hold games 160 / sims 200 / steps 800 / buffer **200k** / `c_puct=1.25` / T=4 / plies=10 / ε=0.25 / `random_opening_plies=0` / `root_q`.
 - **One TRAIN knob:** **LR / lr_min 7.5e-5 → 5e-5** (flat).
 - Watch White first-move diversity (abort if H ≲ 2.0 or c2c4 ≳ 0.40 sustained). Manual gate after the block: **560 vs 540**; lag hygiene **560 vs 520** if INC.
+
+### Iter 561 — dirichlet_alpha 0.15 (discarded)
+
+- Resume from tip **560**. Hold LR 5e-5 / sims 200 / buffer 200k / ε=0.25 / T=4.
+- **One TRAIN knob:** `dirichlet_alpha` **0.30→0.15**.
+- Gate **580 vs 560**: INCONCLUSIVE (+12 Elo). Diversity CRITICAL (block H≈1.64 / c2c4≈0.59 / top1=c2c4 20/20).
+- Discarded; rewind tip **560**; restore α **0.30**. Metrics rows 561–580 cleared.
+
+### Iter 561 — alpha restore washout / recovery (current)
+
+- Restore **`ckpt_iter_0560.pt`** as `latest.pt`.
+- Hold games 160 / sims 200 / steps 800 / buffer **200k** / LR **5e-5** / `c_puct=1.25` / T=4 / plies=10 / ε=0.25 / `random_opening_plies=0` / `root_q`.
+- **Hygiene (not an experiment):** `dirichlet_alpha` **0.15→0.30**.
+- **No new TRAIN knob.** Canary through 565; if green, full recovery block to 580.
+- Manual gate after the block: **580 vs 560**; if INC, champ context **580 vs 540** and optional lag **580 vs 520**.
 
 Last updated: 2026-07-31.

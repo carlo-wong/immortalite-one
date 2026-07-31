@@ -36,8 +36,8 @@ STOP_INTERVAL = 20  # stop after completing iters 160, 180, 200, …
 TRAIN = {
     "sims": 200,  # self-play; gate stays 100
     "c_puct": 1.25,  # post-500 search retune; gates keep Config default 1.5
-    # Sole 561–580 knob: sparser per-game root noise to resist c2c4 lock.
-    "dirichlet_alpha": 0.15,
+    # Discard hygiene: restore baseline alpha after failed 0.15 tip (561-580).
+    "dirichlet_alpha": 0.30,
     "dirichlet_epsilon": 0.25,
     "gate_sims": 100,  # manual gate (run_gate.py / run_train_and_gate.py) only
     "games": 160,  # post-480 freshness experiment; train_steps stays fixed
@@ -68,7 +68,7 @@ TRAIN = {
     "lr_total_iters": 10_000,
     "lr_warmup_iters": 0,
     "grad_clip": 10.0,
-    # Resume tip 560; hold LR/buffer/prefix while testing alpha 0.15.
+    # Resume tip 560; alpha restore hygiene; HOLD LR/sims/buffer/prefix (no new knob).
     "move_temperature": 4.0,
     "move_temperature_plies": 10,
     "random_opening_plies": 0,

@@ -80,12 +80,12 @@ After the job finishes (success or failure), scripts call `Studio().stop()` when
 
 ### Current `TRAIN` defaults
 
-Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T4 has 4 vCPUs; Colab is 2). Current row: resume tip **560** and run 561–580 with the sole training change `dirichlet_alpha` **0.30→0.15**. Next gate: **580 vs 560**. See `TRAINING_CHANGELOG.md`.
+Same recipe as Colab except `selfplay_workers=4` / `gate_workers=4` (Lightning T4 has 4 vCPUs; Colab is 2). Current row: resume tip **560**, restore `dirichlet_alpha` **0.30** (discard hygiene for failed alpha=0.15 tip), HOLD LR **5e-5** / sims **200** — **no new TRAIN knob**. Canary through 565; next gate: **580 vs 560**. See `TRAINING_CHANGELOG.md`.
 
 | Key | Value |
 |-----|-------|
 | `sims` | **200** (self-play; gate stays 100) |
-| `dirichlet_alpha` / `dirichlet_epsilon` | **0.15** / **0.25** |
+| `dirichlet_alpha` / `dirichlet_epsilon` | **0.30** / **0.25** |
 | `games` | **160** |
 | `train_steps` | **800** |
 | `concurrency` | **160** |
