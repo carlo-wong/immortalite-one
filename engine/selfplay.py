@@ -564,6 +564,7 @@ def play_games_batched_native_actors(
     if hasattr(evaluator, "profile"):
         evaluator.profile = profile
 
+    total_started = time.perf_counter() if profile is not None else 0.0
     start_moves = _selfplay_start_moves(cfg, num_games)
     batch = native.GameActorBatch(
         num_games,
@@ -573,6 +574,7 @@ def play_games_batched_native_actors(
         start_moves if start_moves is not None else None,
     )
     completed: list[GameResult] = []
+    out = np.empty((max(1, concurrency), 20, 8, 8), dtype=np.float32)
     while len(completed) < num_games:
         requests = batch.tablebase_requests()
         if requests:
@@ -589,9 +591,11 @@ def play_games_batched_native_actors(
                 outcomes[row] = 1 if wdl == 2 else 2 if wdl == -2 else 3
             batch.apply_tablebase(ids, outcomes)
 
-        out = np.empty((max(1, concurrency), 20, 8, 8), dtype=np.float32)
         actor_ids, planes = batch.positions_needing_eval(out)
         if len(actor_ids):
+            if profile is not None:
+                profile.add_count("selfplay.evaluated_positions", len(actor_ids))
+                profile.observe("batch_width", len(actor_ids))
             if hasattr(evaluator, "evaluate_legal"):
                 legal_indices, legal_offsets = batch.pending_legal_csr()
                 legal_logits, values = evaluator.evaluate_legal(planes, legal_indices, legal_offsets)
@@ -631,6 +635,12 @@ def play_games_batched_native_actors(
             completed.append(game)
             if on_game_finished is not None:
                 on_game_finished(game)
+    if profile is not None:
+        profile.add_seconds("selfplay.total", time.perf_counter() - total_started)
+        profile.add_count("selfplay.games", len(completed))
+        for game in completed:
+            profile.add_count(f"termination.{game.termination}")
+            profile.observe("game_length", len(game.samples))
     return completed
 
 
@@ -1092,6 +1102,7 @@ def _selfplay_worker_run(payload: dict) -> tuple[
     list[int],
     list[int],
     list[str],
+    list[str],
 ]:
     """Reload weights and play games using the process-local compiled net."""
     n_games = int(payload["n_games"])
@@ -1127,7 +1138,8 @@ def _selfplay_worker_run(payload: dict) -> tuple[
     termination_counts: Counter[str] = Counter()
     game_lengths: list[int] = []
     game_outcomes: list[int] = []
-    diversity_moves: list[str] = []
+    first_moves: list[str] = []
+    free_moves: list[str] = []
     games_done = payload.get("games_done")
     prefix_plies = int(cfg.train.random_opening_plies)
 
@@ -1140,9 +1152,11 @@ def _selfplay_worker_run(payload: dict) -> tuple[
         samples.extend(train_samples)
         termination_counts[game.termination] += 1
         game_outcomes.append(_winner_of_worker(game))
+        if game.moves:
+            first_moves.append(game.moves[0])  # White first ply (may be forced prefix)
         free = diversity_move_uci(game.moves, prefix_plies)
-        if free:
-            diversity_moves.append(free)
+        if free is not None and prefix_plies > 0:
+            free_moves.append(free)
         if games_done is not None:
             games_done.value += 1
 
@@ -1155,7 +1169,14 @@ def _selfplay_worker_run(payload: dict) -> tuple[
         on_game_finished=_on_game,
         tablebase=tablebase,
     )
-    return samples, dict(termination_counts), game_lengths, game_outcomes, diversity_moves
+    return (
+        samples,
+        dict(termination_counts),
+        game_lengths,
+        game_outcomes,
+        first_moves,
+        free_moves,
+    )
 
 
 def _selfplay_worker(payload: dict) -> tuple[
@@ -1163,6 +1184,7 @@ def _selfplay_worker(payload: dict) -> tuple[
     dict[str, int],
     list[int],
     list[int],
+    list[str],
     list[str],
 ]:
     """One-shot worker: init net/compile, play, tear down (ephemeral pool path)."""
@@ -1189,20 +1211,31 @@ def _winner_of_worker(game: GameResult) -> int:
 
 
 def _merge_worker_results(
-    results: list[tuple[list[Sample], dict[str, int], list[int], list[int], list[str]]],
-) -> tuple[list[Sample], Counter[str], list[int], list[int], list[str]]:
+    results: list[
+        tuple[list[Sample], dict[str, int], list[int], list[int], list[str], list[str]]
+    ],
+) -> tuple[list[Sample], Counter[str], list[int], list[int], list[str], list[str]]:
     all_samples: list[Sample] = []
     termination_counts: Counter[str] = Counter()
     game_lengths: list[int] = []
     game_outcomes: list[int] = []
-    diversity_moves: list[str] = []
-    for samples, term_dict, lengths, outcomes, moves in results:
+    first_moves: list[str] = []
+    free_moves: list[str] = []
+    for samples, term_dict, lengths, outcomes, firsts, frees in results:
         all_samples.extend(samples)
         termination_counts.update(term_dict)
         game_lengths.extend(lengths)
         game_outcomes.extend(outcomes)
-        diversity_moves.extend(moves)
-    return all_samples, termination_counts, game_lengths, game_outcomes, diversity_moves
+        first_moves.extend(firsts)
+        free_moves.extend(frees)
+    return (
+        all_samples,
+        termination_counts,
+        game_lengths,
+        game_outcomes,
+        first_moves,
+        free_moves,
+    )
 
 
 def _net_cfg_dict(net_cfg: NetConfig) -> dict:
@@ -1273,11 +1306,11 @@ class SelfplayWorkerPool:
         num_games: int,
         on_progress: Callable[[int], None] | None = None,
         evaluator: NetEvaluator | None = None,
-    ) -> tuple[list[Sample], Counter[str], list[int], list[int], list[str]]:
+    ) -> tuple[list[Sample], Counter[str], list[int], list[int], list[str], list[str]]:
         if self._closed:
             raise RuntimeError("SelfplayWorkerPool is closed")
         if num_games <= 0:
-            return [], Counter(), [], [], []
+            return [], Counter(), [], [], [], []
 
         game_counts = _split_games(num_games, self.workers)
         if self.centralized and evaluator is None:
@@ -1355,10 +1388,10 @@ def play_games_parallel(
     device: str,
     syzygy_path: str | None = None,
     on_progress: Callable[[int], None] | None = None,
-) -> tuple[list[Sample], Counter[str], list[int], list[int], list[str]]:
+) -> tuple[list[Sample], Counter[str], list[int], list[int], list[str], list[str]]:
     """One-shot parallel self-play (ephemeral pool). Prefer SelfplayWorkerPool in train."""
     if num_games <= 0:
-        return [], Counter(), [], [], []
+        return [], Counter(), [], [], [], []
     if workers <= 1:
         raise ValueError("play_games_parallel requires workers > 1")
 

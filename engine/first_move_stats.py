@@ -1,8 +1,10 @@
-"""Summarize first-move / first-free-move distributions for diversity logging.
+"""Summarize White first-move distributions for diversity logging.
 
-Live training logs the first *MCTS-chosen* UCI per game (skips forced
-``random_opening_plies``). Shard recovery below still reconstructs White's
-first move from startpos samples when present (legacy / no-prefix shards).
+``metrics_first_moves.csv`` always records White's first ply (``moves[0]``).
+When ``random_opening_plies > 0`` that ply is forced-random, so entropy there
+is expected-high; the first MCTS-chosen reply is logged separately to
+``metrics_first_free_moves.csv``. Shard recovery below reconstructs White's
+first move from startpos samples when present (no-prefix shards).
 """
 
 from __future__ import annotations

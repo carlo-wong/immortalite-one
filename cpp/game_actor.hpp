@@ -86,11 +86,17 @@ class GameActorBatch {
   void advance(Actor& actor);
   void complete(Actor& actor);
   void finish_search(Actor& actor);
+  void begin_eval_validation();
+  Actor& validate_pending_actor(int actor_id);
+  void consume_pending_evals(const std::vector<int>& actor_ids);
 
   GameActorConfig actor_cfg_;
   MctsConfig mcts_cfg_;
   std::vector<std::unique_ptr<Actor>> actors_;
   std::vector<int> last_eval_actor_ids_;
+  std::vector<std::uint8_t> pending_eval_actor_;
+  std::vector<std::uint32_t> seen_eval_generation_;
+  std::uint32_t eval_validation_generation_ = 0;
 };
 
 }  // namespace immortalite

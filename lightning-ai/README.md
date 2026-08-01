@@ -17,7 +17,8 @@ parent/
 ├── immortalite-zero-python/  # optional archived pure-Python oracle
 ├── results/                # checkpoints/shards; reused directly
 │   ├── latest.pt
-│   ├── metrics.csv
+│   ├── metrics_training.csv
+│   ├── metrics_performance.csv
 │   ├── metrics_gates.csv
 │   └── ckpt_iter_XXXX.pt
 └── syzygy345/              # tablebases; reused directly
@@ -74,7 +75,10 @@ nohup python lightning-ai/run_train_and_gate.py > ../results/train_and_gate.log 
 tail -f ../results/train_and_gate.log
 ```
 
-Writes `latest.pt`, `metrics.csv`, shards every iteration to `../results/`. Training survives browser close (~4h studio limit still applies).
+Writes `latest.pt`, `metrics_training.csv`, `metrics_performance.csv`, and shards
+every iteration to `../results/`. Existing combined metrics are preserved as
+`metrics_legacy.csv` when first split. Training survives browser close (~4h
+studio limit still applies).
 
 After the job finishes (success or failure), scripts call `Studio().stop()` when `SLEEP_STUDIO=True` in `lightning-ai/studio_sleep.py` (default on), after a **5-minute delay** (`SLEEP_STUDIO_DELAY_SEC`). That ends GPU billing instead of waiting for idle auto-sleep. Set `SLEEP_STUDIO = False` if you are debugging interactively, or `SLEEP_STUDIO_DELAY_SEC = 0` to stop immediately. Requires `pip install lightning-sdk` once per studio (usually preinstalled).
 

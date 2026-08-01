@@ -39,6 +39,15 @@ def test_diversity_move_skips_prefix() -> None:
     assert diversity_move_uci(["c2c4"], 1) is None
 
 
+def test_white_first_move_is_prefix_when_k1() -> None:
+    """metrics_first_moves should keep White ply-0; free reply is separate."""
+    prefixes = random_legal_opening_prefixes(8, 1, rng=np.random.default_rng(1))
+    for row in prefixes:
+        assert len(row) == 1
+        # White first-move UCI from startpos always has from-rank 1/2.
+        assert row[0][1] in "12"
+
+
 def test_python_play_game_gen_prefix_writes_no_samples() -> None:
     cfg = Config()
     cfg.train.max_game_moves = 4

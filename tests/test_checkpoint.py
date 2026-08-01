@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 import torch
 
+from engine.analyze import load_evaluator
 from engine.config import Config
 from engine.encoding import ENCODING_VERSION, POLICY_SIZE
 from engine.network import ChessNet
@@ -35,6 +36,32 @@ def _fake_sample() -> Sample:
         player=True,
         value=0.5,
     )
+
+
+def test_load_evaluator_accepts_raw_current_state_dict(tmp_path) -> None:
+    cfg = Config()
+    cfg.net.blocks = 1
+    cfg.net.filters = 4
+    torch.manual_seed(20260801)
+    expected = ChessNet(cfg.net).eval()
+    path = tmp_path / "raw_state_dict.pt"
+    torch.save(expected.state_dict(), path)
+
+    evaluator = load_evaluator(str(path), cfg, device="cpu")
+    actual = evaluator.net.eval()
+
+    expected_state = expected.state_dict()
+    actual_state = actual.state_dict()
+    assert actual_state.keys() == expected_state.keys()
+    for key in expected_state:
+        torch.testing.assert_close(actual_state[key], expected_state[key], rtol=0, atol=0)
+
+    inputs = torch.linspace(-1.0, 1.0, steps=2 * 20 * 8 * 8).reshape(2, 20, 8, 8)
+    with torch.inference_mode():
+        expected_outputs = expected(inputs)
+        actual_outputs = actual(inputs)
+    for actual_output, expected_output in zip(actual_outputs, expected_outputs):
+        torch.testing.assert_close(actual_output, expected_output, rtol=0, atol=0)
 
 
 def test_save_checkpoint_round_trip_with_optimizer(tmp_path) -> None:
@@ -161,3 +188,41 @@ def test_legacy_shard_without_value_target_still_loads(tmp_path) -> None:
     loaded = _load_sample_shard(path, expected_value_target="root_q")
     assert len(loaded) == 1
     assert loaded[0].value == pytest.approx(0.5)
+
+
+def test_legacy_shard_singular_keys_match_plural_keys(tmp_path) -> None:
+    planes = np.arange(20 * 8 * 8, dtype=np.float16).reshape(1, 20, 8, 8)
+    policy = np.zeros((1, POLICY_SIZE), dtype=np.float16)
+    policy[0, 17] = 1.0
+    player = np.array([False], dtype=np.bool_)
+    value = np.array([-0.25], dtype=np.float32)
+    common = {
+        "planes": planes,
+        "encoding_version": np.array([ENCODING_VERSION], dtype=np.int16),
+    }
+    singular_path = tmp_path / "samples_iter_0003.npz"
+    plural_path = tmp_path / "samples_iter_0004.npz"
+    np.savez_compressed(
+        singular_path,
+        **common,
+        policy=policy,
+        player=player,
+        value=value,
+    )
+    np.savez_compressed(
+        plural_path,
+        **common,
+        policies=policy,
+        players=player,
+        values=value,
+    )
+
+    singular = _load_sample_shard(str(singular_path), expected_value_target="root_q")
+    plural = _load_sample_shard(str(plural_path), expected_value_target="root_q")
+
+    assert len(singular) == len(plural) == 1
+    np.testing.assert_array_equal(singular[0].planes, plural[0].planes)
+    np.testing.assert_array_equal(singular[0].policy, plural[0].policy)
+    assert singular[0].player is plural[0].player is False
+    assert singular[0].value == plural[0].value == pytest.approx(-0.25)
+    assert singular[0].source_iter == plural[0].source_iter == 0

@@ -8,6 +8,7 @@ survive disconnects (point --checkpoint-dir at a Google Drive folder).
 from __future__ import annotations
 
 import argparse
+import csv
 import math
 import os
 import random
@@ -63,6 +64,72 @@ from .selfplay import (
 
 _SAMPLE_SHARD_PREFIX = "samples_iter_"
 _SAMPLE_SHARD_SUFFIX = ".npz"
+
+TRAINING_METRICS_COLUMNS = (
+    "iter",
+    "games",
+    "sims",
+    "samples",
+    "policy_loss",
+    "value_loss",
+    "policy_entropy",
+    "value_sign_acc",
+    "policy_top1_agree",
+    "grad_norm",
+    "mean_game_len",
+    "decisive_rate",
+    "white_win_rate",
+    "draw_rate",
+    "max_moves_trunc_rate",
+    "value_mean",
+    "value_std",
+    "winrate_vs_prev",
+    "winrate_quick",
+    "learning_rate",
+    "buffer_size",
+    "buffer_min_iter",
+    "buffer_max_iter",
+    "terminations",
+    "value_target",
+    "value_q_ratio",
+    "value_coef",
+    "policy_surprise_data_weight",
+    "c_puct",
+    "dirichlet_alpha",
+    "dirichlet_epsilon",
+    "move_temperature",
+    "move_temperature_plies",
+    "random_opening_plies",
+)
+
+PERFORMANCE_METRICS_COLUMNS = (
+    "iter",
+    "games",
+    "sims",
+    "samples",
+    "seconds",
+    "selfplay_seconds",
+    "train_seconds",
+    "overhead_seconds",
+    "train_steps",
+    "batch_size",
+    "buffer_size",
+    "selfplay_concurrency",
+    "selfplay_workers",
+    "central_inference",
+    "device",
+    "net_blocks",
+    "net_filters",
+    "games_per_hour",
+    "samples_per_second",
+    "selfplay_games_per_hour",
+    "selfplay_samples_per_second",
+    "train_steps_per_second",
+    "gpu_util_pct",
+)
+
+TRAINING_METRICS_HEADER = ",".join(TRAINING_METRICS_COLUMNS)
+PERFORMANCE_METRICS_HEADER = ",".join(PERFORMANCE_METRICS_COLUMNS)
 
 
 def _tqdm_sync_progress(bar: tqdm, completed: int) -> None:
@@ -228,6 +295,172 @@ def save_checkpoint(net: torch.nn.Module, cfg: Config, path: str, iteration: int
         raise
 
 
+def _finite_csv_number(value: object) -> float | None:
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _derived_rate(
+    row: dict[str, str],
+    numerator: str,
+    denominator: str,
+    *,
+    scale: float = 1.0,
+) -> str:
+    num = _finite_csv_number(row.get(numerator, ""))
+    den = _finite_csv_number(row.get(denominator, ""))
+    if num is None or den is None or den <= 0.0:
+        return ""
+    return f"{num * scale / den:.6f}"
+
+
+def _legacy_split_rows(
+    rows: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    training_rows: list[dict[str, str]] = []
+    performance_rows: list[dict[str, str]] = []
+    for legacy in rows:
+        training_rows.append({
+            column: legacy.get(column, "") or "" for column in TRAINING_METRICS_COLUMNS
+        })
+        performance = {
+            column: legacy.get(column, "") or "" for column in PERFORMANCE_METRICS_COLUMNS
+        }
+        total = _finite_csv_number(legacy.get("seconds", ""))
+        selfplay = _finite_csv_number(legacy.get("selfplay_seconds", ""))
+        train = _finite_csv_number(legacy.get("train_seconds", ""))
+        performance["overhead_seconds"] = (
+            f"{total - selfplay - train:.1f}"
+            if total is not None and selfplay is not None and train is not None
+            else ""
+        )
+        performance["games_per_hour"] = _derived_rate(
+            legacy, "games", "seconds", scale=3600.0
+        )
+        performance["samples_per_second"] = _derived_rate(
+            legacy, "samples", "seconds"
+        )
+        performance["selfplay_games_per_hour"] = _derived_rate(
+            legacy, "games", "selfplay_seconds", scale=3600.0
+        )
+        performance["selfplay_samples_per_second"] = _derived_rate(
+            legacy, "samples", "selfplay_seconds"
+        )
+        performance["train_steps_per_second"] = _derived_rate(
+            legacy, "train_steps", "train_seconds"
+        )
+        performance_rows.append(performance)
+    return training_rows, performance_rows
+
+
+def _stage_csv(
+    ckpt_dir: str,
+    columns: tuple[str, ...],
+    rows: list[dict[str, str]],
+) -> str:
+    fd, temp_path = tempfile.mkstemp(dir=ckpt_dir, suffix=".csv.tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=columns, lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(rows)
+    except BaseException:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
+    return temp_path
+
+
+def _unique_legacy_metrics_path(ckpt_dir: str) -> str:
+    candidate = os.path.join(ckpt_dir, "metrics_legacy.csv")
+    suffix = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(ckpt_dir, f"metrics_legacy_{suffix}.csv")
+        suffix += 1
+    return candidate
+
+
+def migrate_legacy_metrics(ckpt_dir: str, *, keep_source: bool = False) -> str | None:
+    """Atomically split a legacy metrics.csv, returning its retained source path."""
+    ckpt_dir = ckpt_dir or "."
+    source = os.path.join(ckpt_dir, "metrics.csv")
+    training_path = os.path.join(ckpt_dir, "metrics_training.csv")
+    performance_path = os.path.join(ckpt_dir, "metrics_performance.csv")
+    split_exists = (os.path.exists(training_path), os.path.exists(performance_path))
+    if all(split_exists):
+        return None
+    if any(split_exists):
+        raise RuntimeError(
+            "incomplete metrics split: metrics_training.csv and "
+            "metrics_performance.csv must either both exist or both be absent"
+        )
+    if not os.path.exists(source):
+        return None
+
+    os.makedirs(ckpt_dir, exist_ok=True)
+    with open(source, encoding="utf-8", newline="") as f:
+        legacy_rows = list(csv.DictReader(f))
+    training_rows, performance_rows = _legacy_split_rows(legacy_rows)
+    training_temp = _stage_csv(ckpt_dir, TRAINING_METRICS_COLUMNS, training_rows)
+    try:
+        performance_temp = _stage_csv(
+            ckpt_dir, PERFORMANCE_METRICS_COLUMNS, performance_rows
+        )
+    except BaseException:
+        os.remove(training_temp)
+        raise
+    retained_source = source if keep_source else _unique_legacy_metrics_path(ckpt_dir)
+    installed: list[str] = []
+    try:
+        os.replace(training_temp, training_path)
+        installed.append(training_path)
+        os.replace(performance_temp, performance_path)
+        installed.append(performance_path)
+        if not keep_source:
+            os.replace(source, retained_source)
+    except BaseException:
+        for path in installed:
+            if os.path.exists(path):
+                os.remove(path)
+        raise
+    finally:
+        for path in (training_temp, performance_temp):
+            if os.path.exists(path):
+                os.remove(path)
+    return retained_source
+
+
+def _append_metrics_csv(
+    path: str,
+    columns: tuple[str, ...],
+    row: dict[str, object],
+) -> None:
+    new = not os.path.exists(path)
+    if not new:
+        with open(path, encoding="utf-8", newline="") as f:
+            existing_header = next(csv.reader(f), [])
+        if existing_header != list(columns):
+            raise RuntimeError(f"unexpected metrics header in {path}")
+    with open(path, "a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=columns, lineterminator="\n")
+        if new:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+def _safe_rate(numerator: float, denominator: float, *, scale: float = 1.0) -> str:
+    if (
+        not math.isfinite(numerator)
+        or not math.isfinite(denominator)
+        or denominator <= 0.0
+    ):
+        return ""
+    return f"{numerator * scale / denominator:.6f}"
+
+
 def _log_metrics(ckpt_dir: str, it: int, sims: int, samples: int, dt: float, *,
                  selfplay_seconds: float = float("nan"),
                  train_seconds: float = float("nan"),
@@ -241,39 +474,106 @@ def _log_metrics(ckpt_dir: str, it: int, sims: int, samples: int, dt: float, *,
                  learning_rate: float, games: int, train_steps: int,
                  batch_size: int, buffer_size: int,
                  termination_counts: dict[str, int],
+                 value_target: str, value_q_ratio: float, value_coef: float,
+                 policy_surprise_data_weight: float, c_puct: float,
+                 dirichlet_alpha: float, dirichlet_epsilon: float,
+                 move_temperature: float, move_temperature_plies: int,
+                 random_opening_plies: int, selfplay_concurrency: int,
+                 selfplay_workers: int, central_inference: bool, device: str,
+                 net_blocks: int, net_filters: int,
                  winrate_quick: float = float("nan"),
                  gpu_util_pct: float = float("nan"),
                  buffer_min_iter: int = 0,
                  buffer_max_iter: int = 0) -> None:
-    os.makedirs(ckpt_dir or ".", exist_ok=True)
-    path = os.path.join(ckpt_dir, "metrics.csv")
-    new = not os.path.exists(path)
+    ckpt_dir = ckpt_dir or "."
+    os.makedirs(ckpt_dir, exist_ok=True)
+    migrate_legacy_metrics(ckpt_dir)
     terminations = ";".join(f"{k}:{v}" for k, v in sorted(termination_counts.items()))
-    with open(path, "a", encoding="utf-8") as f:
-        if new:
-            f.write(
-                "iter,sims,samples,seconds,selfplay_seconds,train_seconds,policy_loss,value_loss,"
-                "policy_entropy,value_sign_acc,policy_top1_agree,grad_norm,"
-                "mean_game_len,decisive_rate,white_win_rate,draw_rate,"
-                "max_moves_trunc_rate,value_mean,value_std,winrate_vs_prev,"
-                "learning_rate,games,train_steps,batch_size,buffer_size,terminations,"
-                "winrate_quick,gpu_util_pct,buffer_min_iter,buffer_max_iter\n"
-            )
-        f.write(
-            f"{it},{sims},{samples},{dt:.1f},{selfplay_seconds:.1f},{train_seconds:.1f},"
-            f"{policy_loss:.6f},{value_loss:.6f},"
-            f"{policy_entropy:.6f},{value_sign_acc:.6f},{policy_top1_agree:.6f},{grad_norm:.6f},"
-            f"{mean_game_len:.6f},{decisive_rate:.6f},{white_win_rate:.6f},{draw_rate:.6f},"
-            f"{max_moves_trunc_rate:.6f},{value_mean:.6f},{value_std:.6f},{winrate_vs_prev:.6f},"
-            f"{learning_rate:.6e},{games},{train_steps},{batch_size},{buffer_size},"
-            f"{terminations},"
-            f"{winrate_quick:.6f},{gpu_util_pct:.6f},{buffer_min_iter},{buffer_max_iter}\n"
-        )
+    training_row: dict[str, object] = {
+        "iter": it,
+        "games": games,
+        "sims": sims,
+        "samples": samples,
+        "policy_loss": f"{policy_loss:.6f}",
+        "value_loss": f"{value_loss:.6f}",
+        "policy_entropy": f"{policy_entropy:.6f}",
+        "value_sign_acc": f"{value_sign_acc:.6f}",
+        "policy_top1_agree": f"{policy_top1_agree:.6f}",
+        "grad_norm": f"{grad_norm:.6f}",
+        "mean_game_len": f"{mean_game_len:.6f}",
+        "decisive_rate": f"{decisive_rate:.6f}",
+        "white_win_rate": f"{white_win_rate:.6f}",
+        "draw_rate": f"{draw_rate:.6f}",
+        "max_moves_trunc_rate": f"{max_moves_trunc_rate:.6f}",
+        "value_mean": f"{value_mean:.6f}",
+        "value_std": f"{value_std:.6f}",
+        "winrate_vs_prev": f"{winrate_vs_prev:.6f}",
+        "winrate_quick": f"{winrate_quick:.6f}",
+        "learning_rate": f"{learning_rate:.6e}",
+        "buffer_size": buffer_size,
+        "buffer_min_iter": buffer_min_iter,
+        "buffer_max_iter": buffer_max_iter,
+        "terminations": terminations,
+        "value_target": value_target,
+        "value_q_ratio": f"{value_q_ratio:.6f}",
+        "value_coef": f"{value_coef:.6f}",
+        "policy_surprise_data_weight": f"{policy_surprise_data_weight:.6f}",
+        "c_puct": f"{c_puct:.6f}",
+        "dirichlet_alpha": f"{dirichlet_alpha:.6f}",
+        "dirichlet_epsilon": f"{dirichlet_epsilon:.6f}",
+        "move_temperature": f"{move_temperature:.6f}",
+        "move_temperature_plies": move_temperature_plies,
+        "random_opening_plies": random_opening_plies,
+    }
+    overhead = (
+        f"{dt - selfplay_seconds - train_seconds:.1f}"
+        if all(math.isfinite(value) for value in (dt, selfplay_seconds, train_seconds))
+        else ""
+    )
+    performance_row: dict[str, object] = {
+        "iter": it,
+        "games": games,
+        "sims": sims,
+        "samples": samples,
+        "seconds": f"{dt:.1f}",
+        "selfplay_seconds": f"{selfplay_seconds:.1f}",
+        "train_seconds": f"{train_seconds:.1f}",
+        "overhead_seconds": overhead,
+        "train_steps": train_steps,
+        "batch_size": batch_size,
+        "buffer_size": buffer_size,
+        "selfplay_concurrency": selfplay_concurrency,
+        "selfplay_workers": selfplay_workers,
+        "central_inference": str(central_inference).lower(),
+        "device": device,
+        "net_blocks": net_blocks,
+        "net_filters": net_filters,
+        "games_per_hour": _safe_rate(float(games), dt, scale=3600.0),
+        "samples_per_second": _safe_rate(float(samples), dt),
+        "selfplay_games_per_hour": _safe_rate(
+            float(games), selfplay_seconds, scale=3600.0
+        ),
+        "selfplay_samples_per_second": _safe_rate(
+            float(samples), selfplay_seconds
+        ),
+        "train_steps_per_second": _safe_rate(float(train_steps), train_seconds),
+        "gpu_util_pct": f"{gpu_util_pct:.6f}",
+    }
+    _append_metrics_csv(
+        os.path.join(ckpt_dir, "metrics_training.csv"),
+        TRAINING_METRICS_COLUMNS,
+        training_row,
+    )
+    _append_metrics_csv(
+        os.path.join(ckpt_dir, "metrics_performance.csv"),
+        PERFORMANCE_METRICS_COLUMNS,
+        performance_row,
+    )
 
 
 def _update_metrics_winrate_vs_prev(ckpt_dir: str, it: int, winrate: float) -> None:
     """Patch winrate_vs_prev on the most recent metrics row for *it*."""
-    path = os.path.join(ckpt_dir, "metrics.csv")
+    path = os.path.join(ckpt_dir, "metrics_training.csv")
     if not os.path.exists(path):
         return
     with open(path, encoding="utf-8") as f:
@@ -313,21 +613,29 @@ def _log_step_metrics(ckpt_dir: str, it: int, step: int, metrics: dict[str, floa
         )
 
 
-def _log_first_move_metrics(ckpt_dir: str, it: int, stats: dict) -> None:
-    """Append first-move diversity row (top-5 + main/flank) and print a one-liner.
+def _log_first_move_metrics(
+    ckpt_dir: str,
+    it: int,
+    stats: dict,
+    *,
+    filename: str = "metrics_first_moves.csv",
+    label: str = "first-moves",
+) -> None:
+    """Append a move-diversity row (top-5 + main/flank) and print a one-liner.
 
     If an older CSV header is present, rename it to ``*_legacy.csv`` and start fresh.
     """
     os.makedirs(ckpt_dir or ".", exist_ok=True)
-    path = os.path.join(ckpt_dir, "metrics_first_moves.csv")
+    path = os.path.join(ckpt_dir, filename)
     header = ",".join(FIRST_MOVE_CSV_COLUMNS)
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
             existing = f.readline().strip()
         if existing and existing != header:
-            legacy = os.path.join(ckpt_dir, "metrics_first_moves_legacy.csv")
+            stem, ext = os.path.splitext(filename)
+            legacy = os.path.join(ckpt_dir, f"{stem}_legacy{ext}")
             os.replace(path, legacy)
-            print(f"first-moves: rotated old CSV → {legacy}", flush=True)
+            print(f"{label}: rotated old CSV → {legacy}", flush=True)
 
     n = int(stats.get("n", 0) or 0)
     entropy = float(stats.get("entropy", float("nan")))
@@ -361,7 +669,7 @@ def _log_first_move_metrics(ckpt_dir: str, it: int, stats: dict) -> None:
         f"top{i}={_top_note(uci, share)}" for i, (uci, share) in enumerate(tops, start=1)
     )
     print(
-        f"first-moves: H={_fmt(entropy)} {top_bits} "
+        f"{label}: H={_fmt(entropy)} {top_bits} "
         f"main={_fmt(main)} flank={_fmt(flank)} (n={n})",
         flush=True,
     )
@@ -1487,7 +1795,8 @@ def main() -> None:
             termination_counts: Counter[str] = Counter()
             game_lengths: list[int] = []
             game_outcomes: list[int] = []
-            diversity_moves: list[str] = []
+            first_moves: list[str] = []
+            free_moves: list[str] = []
             prefix_plies = int(cfg.train.random_opening_plies)
             n_games = cfg.train.games_per_iteration
             game_bar = tqdm(total=n_games, desc=f"iter {it} self-play", unit="game", leave=False)
@@ -1509,9 +1818,12 @@ def main() -> None:
                 new_samples += len(train_samples)
                 termination_counts[game.termination] += 1
                 game_outcomes.append(_winner_of(game))
-                free = diversity_move_uci(game.moves, prefix_plies)
-                if free:
-                    diversity_moves.append(free)
+                if game.moves:
+                    first_moves.append(game.moves[0])  # White first ply
+                if prefix_plies > 0:
+                    free = diversity_move_uci(game.moves, prefix_plies)
+                    if free is not None:
+                        free_moves.append(free)
                 game_bar.set_postfix(moves=len(game.samples), buffer=len(buffer))
                 game_bar.update(1)
 
@@ -1531,7 +1843,8 @@ def main() -> None:
                     parallel_terms,
                     parallel_lengths,
                     parallel_outcomes,
-                    parallel_diversity,
+                    parallel_first,
+                    parallel_free,
                 ) = selfplay_pool.run(
                     cfg,
                     worker_weights_path,
@@ -1547,7 +1860,8 @@ def main() -> None:
                 termination_counts = Counter(parallel_terms)
                 game_lengths = parallel_lengths
                 game_outcomes = parallel_outcomes
-                diversity_moves = list(parallel_diversity)
+                first_moves = list(parallel_first)
+                free_moves = list(parallel_free)
                 _tqdm_sync_progress(game_bar, n_games)
             else:
                 play_games_batched(
@@ -1570,8 +1884,19 @@ def main() -> None:
                 iteration_samples,
                 value_target=cfg.train.value_target,
             )
-            fm_stats = summarize_first_moves(diversity_moves)
-            _log_first_move_metrics(cfg.train.checkpoint_dir, it, fm_stats)
+            # Always log White's first ply (forced-random when prefix is on — expect high H).
+            _log_first_move_metrics(
+                cfg.train.checkpoint_dir, it, summarize_first_moves(first_moves),
+            )
+            # With a forced prefix, also log the first MCTS-chosen reply (often Black).
+            if prefix_plies > 0:
+                _log_first_move_metrics(
+                    cfg.train.checkpoint_dir,
+                    it,
+                    summarize_first_moves(free_moves),
+                    filename="metrics_first_free_moves.csv",
+                    label="first-free-moves",
+                )
 
             net.train()
             step_metrics: dict[str, list[float]] = {}
@@ -1705,6 +2030,22 @@ def main() -> None:
                 batch_size=cfg.train.batch_size,
                 buffer_size=len(buffer),
                 termination_counts=dict(termination_counts),
+                value_target=cfg.train.value_target,
+                value_q_ratio=cfg.train.value_q_ratio,
+                value_coef=cfg.train.value_coef,
+                policy_surprise_data_weight=cfg.train.policy_surprise_data_weight,
+                c_puct=cfg.mcts.c_puct,
+                dirichlet_alpha=cfg.mcts.dirichlet_alpha,
+                dirichlet_epsilon=cfg.mcts.dirichlet_epsilon,
+                move_temperature=cfg.train.move_temperature,
+                move_temperature_plies=cfg.train.move_temperature_plies,
+                random_opening_plies=cfg.train.random_opening_plies,
+                selfplay_concurrency=cfg.train.selfplay_concurrency,
+                selfplay_workers=args.selfplay_workers,
+                central_inference=central_inference,
+                device=args.device,
+                net_blocks=cfg.net.blocks,
+                net_filters=cfg.net.filters,
                 winrate_quick=winrate_quick,
                 gpu_util_pct=gpu_util_pct,
                 buffer_min_iter=buffer_min_iter,

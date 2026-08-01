@@ -219,6 +219,7 @@ void MctsSession::expand_with_priors(
   if (mapping.size() != priors.size()) {
     throw std::logic_error("policy priors do not match legal moves");
   }
+  node.children.reserve(mapping.size());
   for (size_t i = 0; i < mapping.size(); ++i) {
     auto child = std::make_unique<Node>();
     child->prior = priors[i];

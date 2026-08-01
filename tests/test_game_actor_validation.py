@@ -41,3 +41,32 @@ def test_actor_batch_rejects_malformed_or_stale_eval_rows() -> None:
     assert batch.pending_net_ids().tolist() == [0]
     with pytest.raises(ValueError, match="not pending"):
         batch.apply_eval(actor_ids[:1], logits, values)
+
+
+def test_actor_batch_dense_pending_markers_preserve_partial_order() -> None:
+    batch = native.GameActorBatch(
+        3,
+        {"simulations": 2, "max_game_moves": 4, "tb_max_pieces": 0},
+        {},
+        456,
+        a_is_white=[1, 0, 1],
+    )
+    actor_ids, _ = batch.positions_needing_eval(
+        np.empty((3, 20, 8, 8), dtype=np.float32)
+    )
+    assert actor_ids.tolist() == [0, 1, 2]
+
+    logits = np.zeros((2, POLICY_SIZE), dtype=np.float32)
+    values = np.zeros(2, dtype=np.float32)
+    batch.apply_eval(actor_ids[[2, 0]], logits, values)
+    assert batch.pending_net_ids().tolist() == [1]
+
+    with pytest.raises(ValueError, match="duplicate actor id"):
+        batch.apply_eval(actor_ids[[1, 1]], logits, values)
+
+    batch.apply_eval(
+        actor_ids[1:2],
+        np.zeros((1, POLICY_SIZE), dtype=np.float32),
+        np.zeros(1, dtype=np.float32),
+    )
+    assert batch.pending_net_ids().shape == (0,)

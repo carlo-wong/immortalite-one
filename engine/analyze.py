@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 
 import chess
@@ -25,28 +26,51 @@ def value_to_cp(q: float) -> int:
 def load_evaluator(checkpoint_path: str | None, cfg: Config, device: str = "cpu") -> NetEvaluator:
     net_cfg = cfg.net
     state = None
+    model_state = None
+    strict_load = False
     if checkpoint_path and os.path.exists(checkpoint_path):
         state = torch.load(checkpoint_path, map_location=device)
-        ckpt_encoding_version = 1
-        if isinstance(state, dict):
+        if isinstance(state, Mapping) and "model" in state:
             ckpt_encoding_version = int(state.get("encoding_version", 1))
-        if ckpt_encoding_version != ENCODING_VERSION:
-            raise ValueError(
-                f"checkpoint encoding version {ckpt_encoding_version} does not match "
-                f"current encoding version {ENCODING_VERSION}; use a checkpoint "
-                f"trained with the current encoding"
+            if ckpt_encoding_version != ENCODING_VERSION:
+                raise ValueError(
+                    f"checkpoint encoding version {ckpt_encoding_version} does not match "
+                    f"current encoding version {ENCODING_VERSION}; use a checkpoint "
+                    f"trained with the current encoding"
+                )
+            if "net" in state:
+                net_cfg = NetConfig(**state["net"])  # rebuild matching architecture
+            model_state = state["model"]
+        elif isinstance(state, Mapping) and all(
+            isinstance(key, str) and isinstance(value, torch.Tensor)
+            for key, value in state.items()
+        ):
+            model_state = state
+            strict_load = True
+        else:
+            raise TypeError(
+                "checkpoint must be a wrapped checkpoint with a 'model' mapping "
+                "or a raw PyTorch state_dict"
             )
-        if isinstance(state, dict) and "net" in state:
-            net_cfg = NetConfig(**state["net"])  # rebuild matching architecture
+
+        if not isinstance(model_state, Mapping) or not all(
+            isinstance(key, str) and isinstance(value, torch.Tensor)
+            for key, value in model_state.items()
+        ):
+            raise TypeError("checkpoint model must be a PyTorch state_dict mapping")
     net = ChessNet(net_cfg)
-    if state is not None:
-        model_state = state["model"] if "model" in state else state
-        net_state = net.state_dict()
-        matched = {
-            k: v for k, v in model_state.items()
-            if k in net_state and net_state[k].shape == v.shape
-        }
-        net.load_state_dict(matched, strict=False)
+    if model_state is not None:
+        if strict_load:
+            net.load_state_dict(model_state, strict=True)
+        else:
+            # Wrapped checkpoints retain their architecture-compatibility behavior.
+            # Raw state_dicts above are intentionally exact to avoid random tensors.
+            net_state = net.state_dict()
+            matched = {
+                k: v for k, v in model_state.items()
+                if k in net_state and net_state[k].shape == v.shape
+            }
+            net.load_state_dict(matched, strict=False)
     return NetEvaluator(net, device=device)
 
 

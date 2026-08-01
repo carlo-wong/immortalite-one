@@ -37,7 +37,7 @@ Or: [colab.research.google.com](https://colab.research.google.com) → **File �
 | 4 | Syzygy tablebases (Drive cache or download) |
 | 5 | **Train** — always `--device cuda --gpu`; edit `TRAIN` dict only; auto-stops at iters 160, 180, … |
 | 6 | Optional **manual gate** (SPRT, 128 games / 100 sims) |
-| 7 | Plot `metrics.csv` + gate results |
+| 7 | Plot `metrics_training.csv`, `metrics_performance.csv`, and gate results |
 
 ## Step 4 — Current `TRAIN` defaults (cell 5)
 
@@ -88,7 +88,10 @@ Pure self-play on a free GPU targets club-level strength, not Stockfish.
 
 ## Step 6 — Disconnects and resuming
 
-Checkpoints save to Drive **every iteration** (`latest.pt`, `metrics.csv`, sample shards).
+Checkpoints save to Drive **every iteration** (`latest.pt`, split metrics CSVs, sample shards).
+Learning/quality signals are in `metrics_training.csv`; timing, throughput, and
+runtime context are in `metrics_performance.csv`. On upgrade, the previous
+combined file is preserved as `metrics_legacy.csv`.
 
 | Goal | Action |
 |------|--------|
@@ -134,7 +137,7 @@ Legacy Zero checkpoints lack `value_target` metadata: resume with `--value-targe
 | `engine._native` import error | Re-run cell 3; ensure pinned cmake / ninja / build tools installed |
 | CUDA torch became CPU-only | Do not `pip install -r requirements.txt` on Colab; reinstall GPU torch and use `--no-deps` |
 | Drive auth failed | Re-run cell 2 |
-| Training "stuck" | One iter is slower at 200 sims; watch `metrics.csv` |
+| Training "stuck" | One iter is slower at 200 sims; watch `metrics_performance.csv` |
 | OOM | Lower `games` / `concurrency` together, or reduce net in checkpoint (fresh start only) |
 | SPRT always INCONCLUSIVE | Normal early; need more gate games or stronger signal |
 | Old gate CSV garbled | Delete `metrics_gates.csv` and let it recreate |

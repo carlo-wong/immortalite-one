@@ -33,7 +33,7 @@ from engine.encoding import ENCODING_VERSION
 from engine.inference import InferenceSettings
 from engine.network import ChessNet, NetEvaluator
 from engine.profile import ProfileCounters
-from engine.selfplay import SelfplayWorkerPool, play_games_batched_native
+from engine.selfplay import SelfplayWorkerPool, play_games_batched_native_actors
 
 _WORKER: dict[str, Any] = {}
 
@@ -147,7 +147,10 @@ def _worker_run(payload: dict[str, Any]) -> dict[str, Any]:
     evaluator.profile = profile
     cpu_started = time.process_time()
     started = time.perf_counter()
-    games = play_games_batched_native(
+    # Match production self-play's persistent GameActorBatch path. Its profile
+    # exposes network, batch-width, game, and total timing counters, but not the
+    # legacy per-session native node counters because sessions stay inside C++.
+    games = play_games_batched_native_actors(
         evaluator,
         cfg,
         simulations=payload["simulations"],
@@ -454,7 +457,7 @@ def _run_central_trial(
     process_started = time.process_time()
     with ResourceMonitor(args.resource_interval) as monitor:
         started = time.perf_counter()
-        samples, terminations, lengths, _, _ = pool.run(
+        samples, terminations, lengths, _, _, _ = pool.run(
             _central_config(args, net_cfg),
             weights_path=None,
             simulations=args.sims,
