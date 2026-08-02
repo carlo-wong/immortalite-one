@@ -717,6 +717,39 @@ def _elo_ci_verdict(elo_lower: float, elo_upper: float) -> str:
         return "PASS"
     return "INCONCLUSIVE"
 
+
+def _atomic_append_csv_text(path: str, text: str, *, header: str) -> None:
+    """Append CSV text via temp+replace.
+
+    Plain ``open(path, "a")`` is unreliable on Colab Google Drive FUSE mounts —
+    later gate rows can appear written then disappear after sync. Read/rewrite
+    plus ``os.replace`` matches the metrics split path.
+    """
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    existing = ""
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            existing = f.read()
+    if not existing:
+        existing = header
+    elif not existing.endswith("\n"):
+        existing += "\n"
+    payload = existing + text
+    if not text.endswith("\n"):
+        payload += "\n"
+    fd, temp_path = tempfile.mkstemp(dir=directory, suffix=".csv.tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path)
+    except BaseException:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
+
 ANCHOR_CSV_HEADER = (
     "iter,anchor_iter,games,winrate,elo,elo_lower,elo_upper,los\n"
 )
@@ -779,7 +812,6 @@ def _log_anchor_metrics(ckpt_dir: str, it: int, anchor_iter: int,
 def _log_gate_metrics(ckpt_dir: str, it: int, prev_it: int, metrics: dict, games: int) -> None:
     os.makedirs(ckpt_dir or ".", exist_ok=True)
     path = os.path.join(ckpt_dir, "metrics_gates.csv")
-    new = not os.path.exists(path)
 
     wins = metrics["wins_as_white"] + metrics["wins_as_black"]
     losses = metrics["losses_as_white"] + metrics["losses_as_black"]
@@ -788,34 +820,40 @@ def _log_gate_metrics(ckpt_dir: str, it: int, prev_it: int, metrics: dict, games
     elo, elo_lower, elo_upper, los = sprt_elo(wins, draws, losses)
     verdict = _elo_ci_verdict(elo_lower, elo_upper)
 
-    with open(path, "a", encoding="utf-8") as f:
-        if new:
-            f.write(GATE_CSV_HEADER)
-        f.write(
-            f"{it},{prev_it},{games},{games_played},"
-            f"{metrics['wins_as_white']},{metrics['wins_as_black']},"
-            f"{metrics['losses_as_white']},{metrics['losses_as_black']},"
-            f"{metrics['draws_as_white']},{metrics['draws_as_black']},"
-            f"{metrics['winrate']:.6f},{wins},{draws},{losses},"
-            f"{metrics['mean_game_len']:.2f},{metrics['terminations']},"
-            f"{elo:.2f},{elo_lower:.2f},{elo_upper:.2f},{los:.6f},"
-            f"{verdict}\n"
+    gate_line = (
+        f"{it},{prev_it},{games},{games_played},"
+        f"{metrics['wins_as_white']},{metrics['wins_as_black']},"
+        f"{metrics['losses_as_white']},{metrics['losses_as_black']},"
+        f"{metrics['draws_as_white']},{metrics['draws_as_black']},"
+        f"{metrics['winrate']:.6f},{wins},{draws},{losses},"
+        f"{metrics['mean_game_len']:.2f},{metrics['terminations']},"
+        f"{elo:.2f},{elo_lower:.2f},{elo_upper:.2f},{los:.6f},"
+        f"{verdict}\n"
+    )
+    _atomic_append_csv_text(path, gate_line, header=GATE_CSV_HEADER)
+
+    with open(path, encoding="utf-8") as f:
+        last = [ln for ln in f.read().splitlines() if ln.strip()][-1]
+    if not last.startswith(f"{it},{prev_it},"):
+        raise RuntimeError(
+            f"gate metrics verify failed for {it} vs {prev_it}: last row is {last!r} ({path})"
         )
+    print(f"gate metrics logged: {it} vs {prev_it} -> {path}", flush=True)
+    print(f"gate metrics last row: {last}", flush=True)
 
     openings = list(metrics.get("openings") or [])
     openings.sort(key=lambda row: int(row.get("game_idx", 0)))
     if openings:
         openings_path = os.path.join(ckpt_dir, "metrics_gates_openings.csv")
-        openings_new = not os.path.exists(openings_path)
-        with open(openings_path, "a", encoding="utf-8") as f:
-            if openings_new:
-                f.write(GATE_OPENINGS_CSV_HEADER)
-            for row in openings:
-                f.write(
-                    f"{it},{prev_it},{row['game_idx']},{row['a_is_white']},"
-                    f"{row['opening_uci']},{row['result']},{row['termination']},"
-                    f"{row['plies']}\n"
-                )
+        opening_lines = "".join(
+            f"{it},{prev_it},{row['game_idx']},{row['a_is_white']},"
+            f"{row['opening_uci']},{row['result']},{row['termination']},"
+            f"{row['plies']}\n"
+            for row in openings
+        )
+        _atomic_append_csv_text(
+            openings_path, opening_lines, header=GATE_OPENINGS_CSV_HEADER
+        )
     book_lines = metrics.get("book_lines")
     print(
         _opening_summary(
