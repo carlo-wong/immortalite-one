@@ -22,10 +22,6 @@ struct MctsConfig {
   float gumbel_c_scale = 0.1f;
   float draw_contempt = 1.0f / 3.0f;
   bool claim_draw = true;
-  // Multi-leaf / virtual-loss. Both must be enabled (VL>0 and max_leaves>1)
-  // to leave the single-leaf path; defaults preserve bit-identical search.
-  int virtual_loss = 0;           // 0 = OFF
-  int max_leaves_per_eval = 1;    // 1 = current single-leaf behavior
 };
 
 struct MctsResult {
@@ -78,29 +74,16 @@ class MctsSession {
   // Returns number of positions needing eval (0 if done or waiting).
   // Writes planes into out_planes as (N, 20, 8, 8) row-major float32.
   // Caller provides buffer with capacity >= N * 20 * 64; N is usually 1.
-  // When virtual-loss multi-leaf is enabled, N may be up to min(max_n,
-  // max_leaves_per_eval).
   int positions_needing_eval(float* out_planes, int max_n);
 
   // Apply NN outputs. logits: (N, 4672), values: (N,).
-  // N must match the number of pending eval positions currently exposed.
   void apply_eval(const float* logits, const float* values, int n);
 
-  // Legal policy indices for pending eval leaf `i` (i=0 is the only leaf when
-  // multi-leaf is off).
-  const std::vector<int>& pending_legal_indices(int leaf = 0) const;
-
-  int pending_eval_count() const;
+  // Legal policy indices for the single position currently awaiting evaluation.
+  const std::vector<int>& pending_legal_indices() const { return pending_legal_indices_; }
 
   // Apply logits ordered as pending_legal_indices(), avoiding a full policy transfer.
   void apply_eval_legal(const float* legal_logits, int legal_count, float value);
-
-  // Batch legal apply for n pending leaves. offsets has n+1 entries (CSR).
-  void apply_eval_legal(const float* legal_logits, const int* offsets, const float* values,
-                        int n);
-
-  // Sum of outstanding virtual-loss counters across the tree (0 when idle/done).
-  int total_virtual_loss() const;
 
   const MctsResult& result() const { return result_; }
   MctsSessionStats stats() const {
@@ -122,7 +105,6 @@ class MctsSession {
     float prior = 0.0f;
     Move move = NULL_MOVE;
     int N = 0;
-    int N_virtual = 0;  // outstanding virtual loss (PUCT only; cleared on backup)
     double W = 0.0;
     bool terminal_checked = false;
     bool is_terminal = false;
@@ -134,29 +116,8 @@ class MctsSession {
     bool expanded() const { return !children.empty(); }
   };
 
-  // One in-flight leaf awaiting NN eval (virtual-loss multi-leaf mode only).
-  struct PendingLeaf {
-    std::vector<Node*> path;
-    int path_depth = 0;
-    Position board;
-    std::vector<int> legal_indices;
-    std::vector<std::pair<int, Move>> legal_mapping;
-  };
-
-  bool multi_leaf_mode() const {
-    return cfg_.virtual_loss > 0 && cfg_.max_leaves_per_eval > 1;
-  }
-
   void select_to_leaf();
-  // Select up to max_k distinct leaves, applying virtual loss so paths diverge.
-  void select_leaves(int max_k);
-  // Returns true if a new pending leaf was parked; false if a terminal was
-  // backed up or an in-flight leaf was hit (caller should stop).
-  bool select_one_leaf_with_virtual_loss();
-  void apply_virtual_loss_on_path();
-  void remove_virtual_loss_on_path(const std::vector<Node*>& path);
   void backup(float value);
-  void backup_pending(PendingLeaf& leaf, float value);
   void expand_from_eval(Node& node, const Position& board, const float* logits, float value);
   void expand_from_legal_eval(Node& node, const Position& board, const float* legal_logits,
                               float value);
@@ -171,7 +132,6 @@ class MctsSession {
   std::pair<int, Node*> select_child(Node& node) const;
   void collect_result();
   void advance_after_expand();
-  int total_virtual_loss_node(const Node& node) const;
   static ExportedNode export_node(int idx, const Node& node, int depth_left);
 
   MctsConfig cfg_;
@@ -193,7 +153,6 @@ class MctsSession {
   // Full (policy_index, Move) mapping cached with pending_legal_indices_ so
   // expand does not regenerate legal moves a second time.
   std::vector<std::pair<int, Move>> pending_legal_mapping_;
-  std::vector<PendingLeaf> pending_leaves_;
   std::unordered_map<int, float> root_clean_priors_;
   MctsResult result_;
   std::uint64_t steps_ = 0;

@@ -1479,16 +1479,6 @@ def main() -> None:
         "--dirichlet-alpha", type=_positive_dirichlet_alpha, default=None,
         help="root Dirichlet concentration for self-play (>0; lower is sparser)",
     )
-    parser.add_argument(
-        "--virtual-loss", type=int, default=None,
-        help="MCTS virtual loss for multi-leaf search (0=OFF default; typical 1–3; "
-             "QR: changes search dynamics — keep off until gated)",
-    )
-    parser.add_argument(
-        "--max-leaves-per-eval", type=int, default=None,
-        help="max pending leaves per eval wave (1=single-leaf default; >1 needs "
-             "--virtual-loss>0; QR: keep default until gated)",
-    )
     parser.add_argument("--train-steps", type=int, default=None, help="optimizer steps per iteration")
     parser.add_argument("--max-game-moves", type=int, default=None,
                         help="self-play ply safety ceiling (default 10000; not a soft target)")
@@ -1639,14 +1629,6 @@ def main() -> None:
         cfg.mcts.dirichlet_epsilon = eps
     if args.dirichlet_alpha is not None:
         cfg.mcts.dirichlet_alpha = args.dirichlet_alpha
-    if args.virtual_loss is not None:
-        if int(args.virtual_loss) < 0:
-            raise ValueError("--virtual-loss must be >= 0")
-        cfg.mcts.virtual_loss = int(args.virtual_loss)
-    if args.max_leaves_per_eval is not None:
-        if int(args.max_leaves_per_eval) < 1:
-            raise ValueError("--max-leaves-per-eval must be >= 1")
-        cfg.mcts.max_leaves_per_eval = int(args.max_leaves_per_eval)
     if args.concurrency is not None:
         cfg.train.selfplay_concurrency = args.concurrency
     if args.replay_window is not None:
@@ -1715,8 +1697,6 @@ def main() -> None:
         f"c_puct={cfg.mcts.c_puct:.3f} "
         f"dirichlet_alpha={cfg.mcts.dirichlet_alpha:.3f} "
         f"dirichlet_epsilon={cfg.mcts.dirichlet_epsilon:.3f} "
-        f"virtual_loss={cfg.mcts.virtual_loss} "
-        f"max_leaves_per_eval={cfg.mcts.max_leaves_per_eval} "
         f"concurrency={cfg.train.selfplay_concurrency} "
         f"selfplay_workers={args.selfplay_workers} "
         f"central_inference={'on' if central_inference else 'off'} "
@@ -1836,11 +1816,7 @@ def main() -> None:
             net_cfg=cfg.net,
             device=args.device,
             syzygy_path=cfg.train.syzygy_path,
-            inference=InferenceSettings(
-                enabled=central_inference,
-                max_batch_size=max(160, cfg.train.selfplay_concurrency),
-                graph_buckets=(8, 16, 32, 64, 128, 160),
-            ),
+            inference=InferenceSettings(enabled=central_inference),
         )
 
     try:

@@ -21,13 +21,13 @@ from .encoding import NUM_INPUT_PLANES, POLICY_SIZE
 @dataclass(frozen=True)
 class InferenceSettings:
     enabled: bool = True
-    max_batch_size: int = 160
+    max_batch_size: int = 128
     max_wait_us: int = 250
     queue_depth: int = 1
     pinned_buffers: int = 2
     use_cuda_streams: bool = True
     cuda_graphs: Literal["auto", "on", "off"] = "auto"
-    graph_buckets: tuple[int, ...] = (8, 16, 32, 64, 128, 160)
+    graph_buckets: tuple[int, ...] = (8, 16, 32, 64, 128)
     response_timeout_s: float = 120.0
 
 
@@ -263,75 +263,9 @@ class CentralInferenceBroker:
         }
         self._next_worker = 0
         self._aborted: str | None = None
-        batch_cap = max(1, int(settings.max_batch_size))
-        # Arena legal slots are cap * POLICY_SIZE per worker; a merged wave is
-        # bounded by max_batch_size positions each carrying at most POLICY_SIZE.
-        legal_cap = batch_cap * POLICY_SIZE
-        if arena.capacities:
-            legal_cap = max(
-                legal_cap,
-                max(int(cap) for cap in arena.capacities) * POLICY_SIZE,
-            )
-        self._planes_buf = np.empty(
-            (batch_cap, NUM_INPUT_PLANES, 8, 8), dtype=np.float32
-        )
-        self._legal_indices_buf = np.empty(legal_cap, dtype=np.int32)
-        self._legal_offsets_buf = np.empty(batch_cap + 1, dtype=np.int32)
         configure_graphs = getattr(evaluator, "configure_cuda_graphs", None)
         if callable(configure_graphs):
             configure_graphs(settings.cuda_graphs, settings.graph_buckets)
-
-    def _ensure_merge_buffers(self, batch_n: int, legal_n: int = 0) -> None:
-        """Grow reusable merge scratch if a wave exceeds current capacity."""
-        if batch_n > self._planes_buf.shape[0]:
-            self._planes_buf = np.empty(
-                (batch_n, NUM_INPUT_PLANES, 8, 8), dtype=np.float32
-            )
-        if batch_n + 1 > self._legal_offsets_buf.shape[0]:
-            self._legal_offsets_buf = np.empty(batch_n + 1, dtype=np.int32)
-        if legal_n > self._legal_indices_buf.shape[0]:
-            self._legal_indices_buf = np.empty(legal_n, dtype=np.int32)
-
-    def _merge_requests(
-        self, requests: list[InferenceRequest],
-    ) -> tuple[np.ndarray, bool, np.ndarray | None, np.ndarray | None]:
-        """Fill scratch buffers from worker slots; bit-identical to concatenate.
-
-        Returns ``(planes, legal, indices|None, offsets|None)`` as views into
-        reusable buffers (do not retain across subsequent merges).
-        """
-        batch_n = sum(req.count for req in requests)
-        legal = all(req.legal for req in requests)
-        legal_n = sum(req.legal_count for req in requests) if legal else 0
-        self._ensure_merge_buffers(batch_n, legal_n)
-
-        cursor = 0
-        for req in requests:
-            src = self.arena.worker(req.worker_id)["planes"][:req.count]
-            np.copyto(self._planes_buf[cursor:cursor + req.count], src)
-            cursor += req.count
-        planes = self._planes_buf[:batch_n]
-
-        if not legal:
-            return planes, False, None, None
-
-        offsets = self._legal_offsets_buf[: batch_n + 1]
-        offsets[0] = 0
-        cursor = 0
-        index_cursor = 0
-        for req in requests:
-            slot = self.arena.worker(req.worker_id)
-            if req.legal_count:
-                np.copyto(
-                    self._legal_indices_buf[index_cursor:index_cursor + req.legal_count],
-                    slot["legal_indices"][:req.legal_count],
-                )
-            local = slot["legal_offsets"][: req.count + 1]
-            offsets[cursor:cursor + req.count + 1] = local + index_cursor
-            cursor += req.count
-            index_cursor += req.legal_count
-        indices = self._legal_indices_buf[:legal_n]
-        return planes, True, indices, offsets
 
     def service_once(self, timeout_s: float = 0.0) -> int:
         self._fill(timeout_s)
@@ -420,9 +354,23 @@ class CentralInferenceBroker:
         return selected
 
     def _execute(self, requests: list[InferenceRequest]) -> None:
-        planes, legal, indices, offsets = self._merge_requests(requests)
+        planes = np.concatenate(
+            [self.arena.worker(req.worker_id)["planes"][:req.count] for req in requests], axis=0
+        )
+        legal = all(req.legal for req in requests)
         if legal:
-            assert indices is not None and offsets is not None
+            index_parts = [
+                self.arena.worker(req.worker_id)["legal_indices"][:req.legal_count] for req in requests
+            ]
+            offsets = np.zeros(planes.shape[0] + 1, dtype=np.int32)
+            cursor = 0
+            index_cursor = 0
+            for req in requests:
+                local = self.arena.worker(req.worker_id)["legal_offsets"][:req.count + 1]
+                offsets[cursor:cursor + req.count + 1] = local + index_cursor
+                cursor += req.count
+                index_cursor += req.legal_count
+            indices = np.concatenate(index_parts) if index_parts else np.empty(0, dtype=np.int32)
             logits, values = self.evaluator.evaluate_legal(planes, indices, offsets)
         else:
             logits, values = self.evaluator.evaluate_planes(planes)

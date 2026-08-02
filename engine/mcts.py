@@ -131,8 +131,6 @@ class _NativeMCTSAdapter:
             "gumbel_c_scale": self.cfg.gumbel_c_scale,
             "draw_contempt": self.cfg.draw_contempt,
             "claim_draw": self.cfg.claim_draw,
-            "virtual_loss": int(self.cfg.virtual_loss),
-            "max_leaves_per_eval": int(self.cfg.max_leaves_per_eval),
         }
 
     def run(self, board: chess.Board, simulations: int | None = None,

@@ -624,7 +624,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("benchmark_throughput.jsonl"))
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--workers", default="1,2,4")
-    parser.add_argument("--concurrency", default="32,64,96,128,160")
+    parser.add_argument("--concurrency", default="32,64,96,128")
     parser.add_argument("--games", type=int, default=128)
     parser.add_argument("--sims", type=int, default=150)
     parser.add_argument("--max-moves", type=int, default=200)

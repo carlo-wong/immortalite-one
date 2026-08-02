@@ -13,7 +13,6 @@ import torch
 from engine.config import NetConfig
 from engine.inference import (
     CentralInferenceBroker,
-    InferenceRequest,
     InferenceResponse,
     InferenceSettings,
     RemoteEvaluator,
@@ -192,76 +191,6 @@ def test_remote_legal_matches_direct_evaluator() -> None:
         expected = direct.evaluate_legal(planes, indices, offsets)
         np.testing.assert_allclose(result[0][0], expected[0], rtol=0, atol=1e-6)
         np.testing.assert_allclose(result[0][1], expected[1], rtol=0, atol=1e-6)
-    finally:
-        arena.close()
-        arena.unlink()
-
-
-def test_broker_merge_buffers_match_concatenate() -> None:
-    """Scratch merge must be bit-identical to np.concatenate for planes + legal CSR."""
-    arena, requests, responses, settings = _broker_parts(workers=3)
-    try:
-        broker = CentralInferenceBroker(_FakeEvaluator(), arena, requests, responses, settings)
-        # Three worker slots with distinct plane tags and legal CSR segments.
-        specs = [
-            (0, 2, np.asarray([10, 11, 12], dtype=np.int32), np.asarray([0, 2, 3], dtype=np.int32)),
-            (1, 1, np.asarray([20], dtype=np.int32), np.asarray([0, 1], dtype=np.int32)),
-            (2, 2, np.asarray([30, 31, 32, 33], dtype=np.int32), np.asarray([0, 1, 4], dtype=np.int32)),
-        ]
-        reqs: list[InferenceRequest] = []
-        for worker_id, count, indices, offsets in specs:
-            slot = arena.worker(worker_id)
-            tag = float(worker_id + 1)
-            slot["planes"][:count] = tag
-            slot["planes"][:count, 0, 0, 0] = tag  # explicit tag plane
-            legal_count = int(indices.size)
-            slot["legal_indices"][:legal_count] = indices
-            slot["legal_offsets"][: count + 1] = offsets
-            reqs.append(
-                InferenceRequest(
-                    run_id=1,
-                    worker_id=worker_id,
-                    request_id=worker_id,
-                    count=count,
-                    legal=True,
-                    legal_count=legal_count,
-                )
-            )
-
-        expected_planes = np.concatenate(
-            [arena.worker(r.worker_id)["planes"][: r.count] for r in reqs], axis=0
-        )
-        expected_indices = np.concatenate(
-            [arena.worker(r.worker_id)["legal_indices"][: r.legal_count] for r in reqs]
-        )
-        expected_offsets = np.zeros(expected_planes.shape[0] + 1, dtype=np.int32)
-        cursor = 0
-        index_cursor = 0
-        for r in reqs:
-            local = arena.worker(r.worker_id)["legal_offsets"][: r.count + 1]
-            expected_offsets[cursor:cursor + r.count + 1] = local + index_cursor
-            cursor += r.count
-            index_cursor += r.legal_count
-
-        planes, legal, indices, offsets = broker._merge_requests(reqs)
-        assert legal is True
-        assert indices is not None and offsets is not None
-        np.testing.assert_array_equal(planes, expected_planes)
-        np.testing.assert_array_equal(indices, expected_indices)
-        np.testing.assert_array_equal(offsets, expected_offsets)
-
-        # Planes-only path (no legal CSR).
-        plane_reqs = [
-            InferenceRequest(1, wid, wid, cnt, legal=False, legal_count=0)
-            for wid, cnt, _, _ in specs
-        ]
-        expected_planes_only = np.concatenate(
-            [arena.worker(r.worker_id)["planes"][: r.count] for r in plane_reqs], axis=0
-        )
-        planes2, legal2, indices2, offsets2 = broker._merge_requests(plane_reqs)
-        assert legal2 is False
-        assert indices2 is None and offsets2 is None
-        np.testing.assert_array_equal(planes2, expected_planes_only)
     finally:
         arena.close()
         arena.unlink()

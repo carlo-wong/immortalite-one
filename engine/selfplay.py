@@ -88,9 +88,6 @@ def _mcts_cfg_dict(cfg: Config) -> dict[str, Any]:
         "gumbel_c_scale": cfg.mcts.gumbel_c_scale,
         "draw_contempt": cfg.mcts.draw_contempt,
         "claim_draw": cfg.mcts.claim_draw,
-        # QR: defaults keep single-leaf OFF; native uses these once C++ implements.
-        "virtual_loss": int(cfg.mcts.virtual_loss),
-        "max_leaves_per_eval": int(cfg.mcts.max_leaves_per_eval),
     }
 
 
@@ -1007,8 +1004,6 @@ def _config_to_dict(cfg: Config) -> dict:
             "gumbel_c_scale": cfg.mcts.gumbel_c_scale,
             "draw_contempt": cfg.mcts.draw_contempt,
             "claim_draw": cfg.mcts.claim_draw,
-            "virtual_loss": cfg.mcts.virtual_loss,
-            "max_leaves_per_eval": cfg.mcts.max_leaves_per_eval,
         },
         "beauty": {
             "enabled": cfg.beauty.enabled,
