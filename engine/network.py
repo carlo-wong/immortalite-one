@@ -78,7 +78,7 @@ class ChessNet(nn.Module):
 class CudaBatchExecutor:
     """Run fixed-size CUDA graph buckets without changing model semantics."""
 
-    BUCKETS = (8, 16, 32, 64, 128)
+    BUCKETS = (8, 16, 32, 64, 128, 160)
 
     def __init__(
         self,
@@ -115,10 +115,74 @@ class CudaBatchExecutor:
             self._h2d_done = (torch.cuda.Event(), torch.cuda.Event())
             self._compute_done = (torch.cuda.Event(), torch.cuda.Event())
             self._d2h_done = (torch.cuda.Event(), torch.cuda.Event())
+            self._h2d_index_host: torch.Tensor | None = None
+            self._index_device: torch.Tensor | None = None
+            self._d2h_gather_host: torch.Tensor | None = None
+            self._d2h_value_host: torch.Tensor | None = None
 
     @property
     def graph_fallback_count(self) -> int:
         return self._fallback_count
+
+    def _pinned_float_host(self, attr: str, shape: tuple[int, ...]) -> torch.Tensor:
+        """Grow-only pinned float32 buffer viewed as ``shape``."""
+        need = 1
+        for dim in shape:
+            need *= int(dim)
+        buf: torch.Tensor | None = getattr(self, attr)
+        if buf is None or buf.numel() < need:
+            buf = torch.empty(max(need, 1), dtype=torch.float32, pin_memory=True)
+            setattr(self, attr, buf)
+        return buf[:need].view(shape)
+
+    def _ensure_index_buffers(self, n_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Pinned host + device int64 buffers for legal gather indices."""
+        cap = max(int(n_idx), 1)
+        if self._h2d_index_host is None or self._h2d_index_host.numel() < cap:
+            self._h2d_index_host = torch.empty(cap, dtype=torch.int64, pin_memory=True)
+        if self._index_device is None or self._index_device.numel() < cap:
+            self._index_device = torch.empty(cap, dtype=torch.int64, device=self.device)
+        return self._h2d_index_host[:n_idx], self._index_device[:n_idx]
+
+    @torch.inference_mode()
+    def legal_gather_to_numpy(
+        self,
+        logits: torch.Tensor,
+        values: torch.Tensor,
+        linear_indices: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Gather legal logits on-device, then async pinned D2H on ``_d2h_stream``.
+
+        Synchronizes the D2H stream before returning so callers observe completed
+        host arrays (numerical parity with sync ``.cpu().numpy()``).
+        """
+        n_idx = int(linear_indices.shape[0])
+        current = torch.cuda.current_stream(self.device)
+        if n_idx:
+            idx_host, idx_dev = self._ensure_index_buffers(n_idx)
+            np.copyto(idx_host.numpy(), np.ascontiguousarray(linear_indices))
+            h2d_done = self._h2d_done[0]
+            with torch.cuda.stream(self._h2d_stream):
+                idx_dev.copy_(idx_host, non_blocking=True)
+                h2d_done.record(self._h2d_stream)
+            current.wait_event(h2d_done)
+            gathered = torch.take(logits, idx_dev).float().contiguous()
+        else:
+            gathered = torch.empty(0, dtype=torch.float32, device=self.device)
+
+        value_f = values.float().contiguous()
+        g_host = self._pinned_float_host("_d2h_gather_host", tuple(gathered.shape))
+        v_host = self._pinned_float_host("_d2h_value_host", tuple(value_f.shape))
+        d2h_done = self._d2h_done[0]
+        with torch.cuda.stream(self._d2h_stream):
+            self._d2h_stream.wait_stream(current)
+            if n_idx:
+                g_host.copy_(gathered, non_blocking=True)
+            v_host.copy_(value_f, non_blocking=True)
+            d2h_done.record(self._d2h_stream)
+        d2h_done.synchronize()
+        # Copy out: reusable pinned buffers are overwritten on the next call.
+        return g_host.numpy().copy(), v_host.numpy().copy()
 
     def invalidate_graphs(self) -> None:
         """Discard captured graphs after model weights or architecture change."""
@@ -187,8 +251,10 @@ class CudaBatchExecutor:
         self._lane = 1 - lane
         host = self._host_lanes[bucket][lane]
         device_input = self._device_lanes[bucket][lane]
-        host.zero_()
-        host[:n].copy_(torch.from_numpy(planes))
+        # Write only the live slice into pinned memory; zero pad for full-bucket graphs.
+        np.copyto(host.numpy()[:n], planes)
+        if n < bucket:
+            host[n:].zero_()
         h2d_done = self._h2d_done[lane]
         compute_done = self._compute_done[lane]
         with torch.cuda.stream(self._h2d_stream):
@@ -462,11 +528,17 @@ class NetEvaluator:
         counts = np.diff(offsets.astype(np.int64, copy=False))
         row_ids = np.repeat(np.arange(n, dtype=np.int64), counts)
         linear_indices = row_ids * POLICY_SIZE + indices.astype(np.int64, copy=False)
-        device = logits.device
-        gather_t = torch.from_numpy(np.ascontiguousarray(linear_indices)).to(device)
-        gathered_t = torch.take(logits, gather_t).float()
-        gathered = gathered_t.cpu().numpy()
-        values = value.float().cpu().numpy()
+        executor = self._cuda_executor
+        if executor is not None and executor._cuda and logits.is_cuda:
+            gathered, values = executor.legal_gather_to_numpy(
+                logits, value, linear_indices
+            )
+        else:
+            device = logits.device
+            gather_t = torch.from_numpy(np.ascontiguousarray(linear_indices)).to(device)
+            gathered_t = torch.take(logits, gather_t).float()
+            gathered = gathered_t.cpu().numpy()
+            values = value.float().cpu().numpy()
         if profile is not None:
             profile.add_seconds("network.legal_gather", time.perf_counter() - started)
             profile.add_count("network.legal_gather_calls")

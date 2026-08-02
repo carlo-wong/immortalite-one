@@ -87,7 +87,8 @@ GameActorBatch::GameActorBatch(int game_count, const GameActorConfig& actor_cfg,
   mcts_cfg_.draw_contempt = actor_cfg_.draw_contempt;
   init_attack_tables();
   init_zobrist();
-  pending_eval_actor_.assign(static_cast<size_t>(game_count), 0);
+  pending_eval_rows_.assign(static_cast<size_t>(game_count), 0);
+  seen_eval_rows_.assign(static_cast<size_t>(game_count), 0);
   seen_eval_generation_.assign(static_cast<size_t>(game_count), 0);
   actors_.reserve(static_cast<size_t>(game_count));
   for (int id = 0; id < game_count; ++id) {
@@ -181,24 +182,38 @@ void GameActorBatch::apply_tablebase(const std::vector<int>& actor_ids,
   }
 }
 
+int GameActorBatch::plane_capacity_hint() const {
+  const int leaves =
+      multi_leaf_mode() ? std::max(1, mcts_cfg_.max_leaves_per_eval) : 1;
+  return static_cast<int>(actors_.size()) * leaves;
+}
+
 int GameActorBatch::positions_needing_eval(float* out_planes, int capacity,
                                            std::vector<int>& actor_ids) {
   actor_ids.clear();
   for (int id : last_eval_actor_ids_) {
-    pending_eval_actor_[static_cast<size_t>(id)] = 0;
+    pending_eval_rows_[static_cast<size_t>(id)] = 0;
   }
   last_eval_actor_ids_.clear();
   if (capacity < 0) throw std::invalid_argument("negative plane capacity");
   int count = 0;
+  const int per_actor_cap =
+      multi_leaf_mode() ? std::max(1, mcts_cfg_.max_leaves_per_eval) : 1;
   for (auto& actor : actors_) {
-    if (actor->state != GameActorState::NeedEval || !actor->session || actor->session->done()) continue;
+    if (actor->state != GameActorState::NeedEval || !actor->session || actor->session->done()) {
+      continue;
+    }
     if (count >= capacity) break;
-    if (actor->session->positions_needing_eval(out_planes + count * NUM_INPUT_PLANES * 64, 1) > 0) {
+    const int row_budget = std::min(per_actor_cap, capacity - count);
+    const int k = actor->session->positions_needing_eval(
+        out_planes + static_cast<size_t>(count) * NUM_INPUT_PLANES * 64, row_budget);
+    if (k <= 0) continue;
+    for (int i = 0; i < k; ++i) {
       actor_ids.push_back(actor->id);
       last_eval_actor_ids_.push_back(actor->id);
-      pending_eval_actor_[static_cast<size_t>(actor->id)] = 1;
-      ++count;
     }
+    pending_eval_rows_[static_cast<size_t>(actor->id)] = k;
+    count += k;
   }
   return count;
 }
@@ -217,16 +232,20 @@ std::vector<int> GameActorBatch::pending_net_ids() const {
 LegalCsr GameActorBatch::pending_legal_csr() const {
   LegalCsr out;
   out.offsets.reserve(last_eval_actor_ids_.size() + 1);
+  std::vector<int> leaf_cursor(actors_.size(), 0);
   size_t legal_count = 0;
   for (int id : last_eval_actor_ids_) {
     const auto& actor = *actors_[static_cast<size_t>(id)];
-    legal_count += actor.session->pending_legal_indices().size();
+    const int leaf = leaf_cursor[static_cast<size_t>(id)]++;
+    legal_count += actor.session->pending_legal_indices(leaf).size();
   }
   out.indices.reserve(legal_count);
   out.offsets.push_back(0);
+  std::fill(leaf_cursor.begin(), leaf_cursor.end(), 0);
   for (int id : last_eval_actor_ids_) {
     const auto& actor = *actors_[static_cast<size_t>(id)];
-    const auto& legal = actor.session->pending_legal_indices();
+    const int leaf = leaf_cursor[static_cast<size_t>(id)]++;
+    const auto& legal = actor.session->pending_legal_indices(leaf);
     out.indices.insert(out.indices.end(), legal.begin(), legal.end());
     out.offsets.push_back(static_cast<int>(out.indices.size()));
   }
@@ -239,30 +258,36 @@ void GameActorBatch::begin_eval_validation() {
     std::fill(seen_eval_generation_.begin(), seen_eval_generation_.end(), 0);
     eval_validation_generation_ = 1;
   }
+  std::fill(seen_eval_rows_.begin(), seen_eval_rows_.end(), 0);
 }
 
-GameActorBatch::Actor& GameActorBatch::validate_pending_actor(int actor_id) {
+GameActorBatch::Actor& GameActorBatch::validate_pending_actor(int actor_id, int* leaf_slot_out) {
   if (actor_id < 0 || actor_id >= static_cast<int>(actors_.size())) {
     throw std::invalid_argument("actor id");
   }
   const size_t index = static_cast<size_t>(actor_id);
-  if (seen_eval_generation_[index] == eval_validation_generation_) {
-    throw std::invalid_argument("duplicate actor id");
-  }
-  seen_eval_generation_[index] = eval_validation_generation_;
   Actor& actor = *actors_[index];
-  if (actor.state != GameActorState::NeedEval || !actor.session || !pending_eval_actor_[index]) {
+  if (actor.state != GameActorState::NeedEval || !actor.session || pending_eval_rows_[index] <= 0) {
     throw std::invalid_argument("actor id is not pending evaluation");
   }
+  if (seen_eval_generation_[index] != eval_validation_generation_) {
+    seen_eval_generation_[index] = eval_validation_generation_;
+    seen_eval_rows_[index] = 0;
+  }
+  if (seen_eval_rows_[index] >= pending_eval_rows_[index]) {
+    throw std::invalid_argument("duplicate actor id");
+  }
+  if (leaf_slot_out) *leaf_slot_out = seen_eval_rows_[index];
+  ++seen_eval_rows_[index];
   return actor;
 }
 
 void GameActorBatch::consume_pending_evals(const std::vector<int>& actor_ids) {
   for (int id : actor_ids) {
-    pending_eval_actor_[static_cast<size_t>(id)] = 0;
+    pending_eval_rows_[static_cast<size_t>(id)] = 0;
   }
   std::erase_if(last_eval_actor_ids_, [&](int id) {
-    return pending_eval_actor_[static_cast<size_t>(id)] == 0;
+    return pending_eval_rows_[static_cast<size_t>(id)] == 0;
   });
 }
 
@@ -345,11 +370,26 @@ void GameActorBatch::apply_eval(const std::vector<int>& actor_ids, const float* 
   for (int id : actor_ids) {
     validate_pending_actor(id);
   }
-  for (int row = 0; row < n; ++row) {
+  // Require each pending actor in this call to supply every packed row.
+  for (size_t id = 0; id < actors_.size(); ++id) {
+    if (pending_eval_rows_[id] <= 0) continue;
+    if (seen_eval_generation_[id] == eval_validation_generation_ &&
+        seen_eval_rows_[id] != pending_eval_rows_[id] && seen_eval_rows_[id] > 0) {
+      throw std::invalid_argument("actor eval rows must cover all pending leaves");
+    }
+  }
+
+  // Group contiguous runs by actor so multi-leaf apply is atomic per session.
+  int row = 0;
+  while (row < n) {
     const int id = actor_ids[static_cast<size_t>(row)];
+    int end = row + 1;
+    while (end < n && actor_ids[static_cast<size_t>(end)] == id) ++end;
     Actor& actor = *actors_[static_cast<size_t>(id)];
-    actor.session->apply_eval(logits + static_cast<size_t>(row) * POLICY_SIZE, values + row, 1);
+    const int k = end - row;
+    actor.session->apply_eval(logits + static_cast<size_t>(row) * POLICY_SIZE, values + row, k);
     if (actor.session->done()) finish_search(actor);
+    row = end;
   }
   consume_pending_evals(actor_ids);
 }
@@ -362,18 +402,36 @@ void GameActorBatch::apply_eval_legal(const std::vector<int>& actor_ids, const f
   begin_eval_validation();
   for (int row = 0; row < n; ++row) {
     const int id = actor_ids[static_cast<size_t>(row)];
-    const Actor& actor = validate_pending_actor(id);
+    int leaf = 0;
+    const Actor& actor = validate_pending_actor(id, &leaf);
     const int start = offsets[row], end = offsets[row + 1];
     if (start < 0 || end < start ||
-        end - start != static_cast<int>(actor.session->pending_legal_indices().size())) {
+        end - start != static_cast<int>(actor.session->pending_legal_indices(leaf).size())) {
       throw std::invalid_argument("legal offsets do not match pending legal moves");
     }
   }
-  for (int row = 0; row < n; ++row) {
-    Actor& actor = *actors_[static_cast<size_t>(actor_ids[static_cast<size_t>(row)])];
-    const int start = offsets[row], end = offsets[row + 1];
-    actor.session->apply_eval_legal(legal_logits + start, end - start, values[row]);
+  for (size_t id = 0; id < actors_.size(); ++id) {
+    if (pending_eval_rows_[id] <= 0) continue;
+    if (seen_eval_generation_[id] == eval_validation_generation_ &&
+        seen_eval_rows_[id] != pending_eval_rows_[id] && seen_eval_rows_[id] > 0) {
+      throw std::invalid_argument("actor eval rows must cover all pending leaves");
+    }
+  }
+
+  int row = 0;
+  while (row < n) {
+    const int id = actor_ids[static_cast<size_t>(row)];
+    int end = row + 1;
+    while (end < n && actor_ids[static_cast<size_t>(end)] == id) ++end;
+    Actor& actor = *actors_[static_cast<size_t>(id)];
+    const int k = end - row;
+    // Rebase CSR offsets for this actor's contiguous leaf block to start at 0.
+    std::vector<int> local_offsets(static_cast<size_t>(k + 1));
+    const int base = offsets[row];
+    for (int i = 0; i <= k; ++i) local_offsets[static_cast<size_t>(i)] = offsets[row + i] - base;
+    actor.session->apply_eval_legal(legal_logits + base, local_offsets.data(), values + row, k);
     if (actor.session->done()) finish_search(actor);
+    row = end;
   }
   consume_pending_evals(actor_ids);
 }

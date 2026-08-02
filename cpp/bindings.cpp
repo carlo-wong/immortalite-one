@@ -48,6 +48,8 @@ immortalite::MctsConfig config_from_dict(const py::dict& d) {
   get_f("gumbel_c_scale", cfg.gumbel_c_scale);
   get_f("draw_contempt", cfg.draw_contempt);
   get_b("claim_draw", cfg.claim_draw);
+  get_i("virtual_loss", cfg.virtual_loss);
+  get_i("max_leaves_per_eval", cfg.max_leaves_per_eval);
   return cfg;
 }
 
@@ -180,17 +182,18 @@ class PyMctsSession {
   }
 
   py::array_t<float> positions_needing_eval() {
-    std::vector<float> tmp(static_cast<size_t>(immortalite::NUM_INPUT_PLANES * 64));
-    int n = session_->positions_needing_eval(tmp.data(), 1);
+    const auto& cfg = session_->config();
+    const int max_n =
+        (cfg.virtual_loss > 0 && cfg.max_leaves_per_eval > 1) ? cfg.max_leaves_per_eval : 1;
+    std::vector<float> tmp(
+        static_cast<size_t>(max_n) * immortalite::NUM_INPUT_PLANES * 64);
+    int n = session_->positions_needing_eval(tmp.data(), max_n);
     if (n <= 0) {
       return py::array_t<float>(std::vector<py::ssize_t>{0, immortalite::NUM_INPUT_PLANES, 8, 8});
     }
-    py::array_t<float> arr({1, immortalite::NUM_INPUT_PLANES, 8, 8});
-    auto buf = arr.mutable_unchecked<4>();
-    for (int p = 0; p < immortalite::NUM_INPUT_PLANES; ++p)
-      for (int r = 0; r < 8; ++r)
-        for (int f = 0; f < 8; ++f)
-          buf(0, p, r, f) = tmp[static_cast<size_t>((p * 8 + r) * 8 + f)];
+    py::array_t<float> arr({n, immortalite::NUM_INPUT_PLANES, 8, 8});
+    std::memcpy(arr.mutable_data(), tmp.data(),
+                static_cast<size_t>(n) * immortalite::NUM_INPUT_PLANES * 64 * sizeof(float));
     return arr;
   }
 
@@ -204,17 +207,22 @@ class PyMctsSession {
       throw std::invalid_argument("row must be within out's first dimension");
     }
     auto buffer = out.mutable_unchecked<4>();
+    // Single-row into API: always expose at most one leaf at `row`.
     return session_->positions_needing_eval(&buffer(row, 0, 0, 0), 1) > 0;
   }
 
   py::array_t<int> pending_legal_indices() const {
-    const auto& indices = session_->pending_legal_indices();
+    const auto& indices = session_->pending_legal_indices(0);
     py::array_t<int> out(static_cast<py::ssize_t>(indices.size()));
     if (!indices.empty()) {
       std::memcpy(out.mutable_data(), indices.data(), indices.size() * sizeof(int));
     }
     return out;
   }
+
+  int pending_eval_count() const { return session_->pending_eval_count(); }
+
+  int total_virtual_loss() const { return session_->total_virtual_loss(); }
 
   void apply_eval(py::array_t<float, py::array::c_style | py::array::forcecast> logits,
                   py::array_t<float, py::array::c_style | py::array::forcecast> values) {
@@ -325,7 +333,7 @@ class PyGameActorBatch {
     py::array_t<float, py::array::c_style> target;
     if (out.is_none()) {
       owned = py::array_t<float>(py::array::ShapeContainer{
-          static_cast<py::ssize_t>(batch_.actor_count()),
+          static_cast<py::ssize_t>(batch_.plane_capacity_hint()),
           static_cast<py::ssize_t>(immortalite::NUM_INPUT_PLANES),
           static_cast<py::ssize_t>(8), static_cast<py::ssize_t>(8)});
       target = owned;
@@ -488,6 +496,8 @@ PYBIND11_MODULE(_native, m) {
       .def("positions_needing_eval_into", &PyMctsSession::positions_needing_eval_into,
            py::arg("out"), py::arg("row"))
       .def("pending_legal_indices", &PyMctsSession::pending_legal_indices)
+      .def("pending_eval_count", &PyMctsSession::pending_eval_count)
+      .def("total_virtual_loss", &PyMctsSession::total_virtual_loss)
       .def("apply_eval", &PyMctsSession::apply_eval, py::arg("logits"), py::arg("values"))
       .def("apply_eval_legal", &PyMctsSession::apply_eval_legal,
            py::arg("legal_logits"), py::arg("value"))

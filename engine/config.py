@@ -30,6 +30,12 @@ class MCTSConfig:
     # claim_draw=True catches threefold/50-move draws inside search, but is
     # a bit more expensive than plain terminal checks.
     claim_draw: bool = True
+    # Multi-leaf / virtual-loss MCTS (native). Default OFF preserves single-leaf
+    # search dynamics exactly. Enabling is quality-risk (QR): do not turn on for
+    # production self-play until gated. Typical AZ virtual_loss is 1–3 when on.
+    # max_leaves_per_eval>1 only takes effect when virtual_loss>0.
+    virtual_loss: int = 0           # 0 = OFF
+    max_leaves_per_eval: int = 1    # 1 = single-leaf (current behavior)
 
 
 @dataclass

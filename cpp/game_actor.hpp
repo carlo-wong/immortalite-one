@@ -81,20 +81,29 @@ class GameActorBatch {
                         const int* offsets, const float* values, int n);
   std::vector<CompletedGame> take_completed();
 
+  // Default host plane buffer size hint (actors × max leaves when VL multi-leaf on).
+  int plane_capacity_hint() const;
+
  private:
   struct Actor;
   void advance(Actor& actor);
   void complete(Actor& actor);
   void finish_search(Actor& actor);
   void begin_eval_validation();
-  Actor& validate_pending_actor(int actor_id);
+  Actor& validate_pending_actor(int actor_id, int* leaf_slot_out = nullptr);
   void consume_pending_evals(const std::vector<int>& actor_ids);
+  bool multi_leaf_mode() const {
+    return mcts_cfg_.virtual_loss > 0 && mcts_cfg_.max_leaves_per_eval > 1;
+  }
 
   GameActorConfig actor_cfg_;
   MctsConfig mcts_cfg_;
   std::vector<std::unique_ptr<Actor>> actors_;
   std::vector<int> last_eval_actor_ids_;
-  std::vector<std::uint8_t> pending_eval_actor_;
+  // Rows packed for each actor in the current eval wave (0 = not pending).
+  std::vector<int> pending_eval_rows_;
+  // Per-actor leaf cursor within the current validation generation.
+  std::vector<int> seen_eval_rows_;
   std::vector<std::uint32_t> seen_eval_generation_;
   std::uint32_t eval_validation_generation_ = 0;
 };

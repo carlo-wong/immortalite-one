@@ -48,8 +48,24 @@ def test_custom_graph_buckets_and_broker_settings_are_wired() -> None:
 
     evaluator = RecordingEvaluator()
     settings = InferenceSettings(cuda_graphs="off", graph_buckets=(4, 12))
-    CentralInferenceBroker(evaluator, None, None, (), settings)
+
+    class _StubArena:
+        capacities: tuple[int, ...] = ()
+
+    CentralInferenceBroker(evaluator, _StubArena(), None, (), settings)
     assert evaluator.configured == ("off", (4, 12))
+
+
+def test_default_buckets_cover_160() -> None:
+    assert InferenceSettings().max_batch_size == 160
+    assert InferenceSettings().graph_buckets == (8, 16, 32, 64, 128, 160)
+    assert CudaBatchExecutor.BUCKETS == (8, 16, 32, 64, 128, 160)
+
+    executor = CudaBatchExecutor(_net(), "cpu", graph_mode="on")
+    assert executor._bucket_for(128) == 128
+    assert executor._bucket_for(129) == 160
+    assert executor._bucket_for(160) == 160
+    assert executor._bucket_for(161) is None
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
