@@ -19,8 +19,8 @@ from typing import Any
 
 # --- edit checkpoints and match settings here (matches run_train.py gate_* defaults) ---
 # Use an int (iteration number) or the string "latest".
-CHECKPOINT_A: int | str = 400
-CHECKPOINT_B: int | str = 380
+CHECKPOINT_A: int | str = 620
+CHECKPOINT_B: int | str = 600  # adjacent; for lag 620 vs 580, set B=580 and re-run
 
 GATE_GAMES = 256
 GATE_SIMS = 100
