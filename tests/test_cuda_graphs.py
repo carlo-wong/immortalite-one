@@ -52,6 +52,17 @@ def test_custom_graph_buckets_and_broker_settings_are_wired() -> None:
     assert evaluator.configured == ("off", (4, 12))
 
 
+def test_default_buckets_cover_160() -> None:
+    """Concurrency-160 waves must hit a graph bucket, not fall to eager."""
+    assert InferenceSettings().max_batch_size == 160
+    assert 160 in InferenceSettings().graph_buckets
+    assert CudaBatchExecutor.BUCKETS[-1] == 160
+    executor = CudaBatchExecutor(_net(), "cpu", graph_mode="on")
+    for n in (129, 160):
+        assert executor._bucket_for(n) == 160
+    assert executor._bucket_for(161) is None
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
 @pytest.mark.parametrize("n", [1, 7, 8, 9, 16, 17, 64])
 def test_graph_bucket_padding_matches_eager(n: int) -> None:

@@ -1816,7 +1816,11 @@ def main() -> None:
             net_cfg=cfg.net,
             device=args.device,
             syzygy_path=cfg.train.syzygy_path,
-            inference=InferenceSettings(enabled=central_inference),
+            inference=InferenceSettings(
+                enabled=central_inference,
+                max_batch_size=max(160, cfg.train.selfplay_concurrency),
+                graph_buckets=(8, 16, 32, 64, 128, 160),
+            ),
         )
 
     try:

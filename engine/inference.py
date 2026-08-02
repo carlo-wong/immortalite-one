@@ -21,13 +21,13 @@ from .encoding import NUM_INPUT_PLANES, POLICY_SIZE
 @dataclass(frozen=True)
 class InferenceSettings:
     enabled: bool = True
-    max_batch_size: int = 128
+    max_batch_size: int = 160
     max_wait_us: int = 250
     queue_depth: int = 1
     pinned_buffers: int = 2
     use_cuda_streams: bool = True
     cuda_graphs: Literal["auto", "on", "off"] = "auto"
-    graph_buckets: tuple[int, ...] = (8, 16, 32, 64, 128)
+    graph_buckets: tuple[int, ...] = (8, 16, 32, 64, 128, 160)
     response_timeout_s: float = 120.0
 
 

@@ -78,7 +78,7 @@ class ChessNet(nn.Module):
 class CudaBatchExecutor:
     """Run fixed-size CUDA graph buckets without changing model semantics."""
 
-    BUCKETS = (8, 16, 32, 64, 128)
+    BUCKETS = (8, 16, 32, 64, 128, 160)
 
     def __init__(
         self,
