@@ -19,8 +19,13 @@ from typing import Any
 
 # --- edit checkpoints and match settings here (matches run_train.py gate_* defaults) ---
 # Use an int (iteration number) or the string "latest".
+# GATE_MATCHES runs in order; each pair is logged to metrics_gates.csv.
 CHECKPOINT_A: int | str = 620
-CHECKPOINT_B: int | str = 600  # adjacent; for lag 620 vs 580, set B=580 and re-run
+CHECKPOINT_B: int | str = 600  # adjacent (kept for backwards-compatible single-pair edits)
+GATE_MATCHES: list[tuple[int | str, int | str]] = [
+    (620, 600),  # adjacent
+    (620, 580),  # lag / formal champ
+]
 
 GATE_GAMES = 256
 GATE_SIMS = 100
@@ -175,8 +180,11 @@ def run_gate_match(
 def main() -> None:
     from studio_sleep import maybe_stop_studio
 
+    matches = list(GATE_MATCHES) if GATE_MATCHES else [(CHECKPOINT_A, CHECKPOINT_B)]
     try:
-        run_gate_match(CHECKPOINT_A, CHECKPOINT_B)
+        for i, (ckpt_a, ckpt_b) in enumerate(matches, start=1):
+            print(f"\n### Gate {i}/{len(matches)}: {ckpt_a} vs {ckpt_b}")
+            run_gate_match(ckpt_a, ckpt_b)
     finally:
         maybe_stop_studio()
 
