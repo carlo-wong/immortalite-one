@@ -13,6 +13,7 @@ from engine.network import ChessNet
 from engine.selfplay import Sample
 from engine.train import (
     _load_sample_shard,
+    _mirror_training_artifacts,
     _require_value_target_compat,
     _save_sample_shard,
     save_checkpoint,
@@ -107,6 +108,43 @@ def test_save_checkpoint_without_optimizer_backward_compat(tmp_path) -> None:
     net2.load_state_dict(state["model"])
     optimizer = torch.optim.Adam(net2.parameters(), lr=1e-3)
     assert optimizer.state_dict()["state"] == {}
+
+
+def test_mirror_training_artifacts_copies_supported_files_atomically(tmp_path) -> None:
+    source = tmp_path / "local"
+    mirror = tmp_path / "drive"
+    source.mkdir()
+    (source / "latest.pt").write_bytes(b"latest")
+    (source / "ckpt_iter_0010.pt").write_bytes(b"snapshot")
+    (source / "samples_iter_0010.npz").write_bytes(b"shard")
+    (source / "metrics_training.csv").write_text("iter\n10\n", encoding="utf-8")
+    (source / "_worker_net.pt").write_bytes(b"temporary")
+
+    copied = _mirror_training_artifacts(str(source), str(mirror))
+
+    assert copied == 4
+    assert (mirror / "latest.pt").read_bytes() == b"latest"
+    assert (mirror / "ckpt_iter_0010.pt").read_bytes() == b"snapshot"
+    assert (mirror / "samples_iter_0010.npz").read_bytes() == b"shard"
+    assert (mirror / "metrics_training.csv").read_text(encoding="utf-8") == "iter\n10\n"
+    assert not (mirror / "_worker_net.pt").exists()
+    assert not list(mirror.glob("*.tmp"))
+
+
+def test_mirror_training_artifacts_retries_mutable_and_skips_immutable(tmp_path) -> None:
+    source = tmp_path / "local"
+    mirror = tmp_path / "drive"
+    source.mkdir()
+    mirror.mkdir()
+    (source / "latest.pt").write_bytes(b"newest")
+    (mirror / "latest.pt").write_bytes(b"stale!")
+    (source / "samples_iter_0010.npz").write_bytes(b"same")
+    (mirror / "samples_iter_0010.npz").write_bytes(b"same")
+
+    copied = _mirror_training_artifacts(str(source), str(mirror))
+
+    assert copied == 1
+    assert (mirror / "latest.pt").read_bytes() == b"newest"
 
 
 def test_sample_shard_atomic_round_trip(tmp_path) -> None:

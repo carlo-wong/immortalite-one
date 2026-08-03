@@ -12,6 +12,7 @@ import csv
 import math
 import os
 import random
+import shutil
 import subprocess
 import tempfile
 import time
@@ -293,6 +294,52 @@ def save_checkpoint(net: torch.nn.Module, cfg: Config, path: str, iteration: int
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
         raise
+
+
+def _mirror_training_artifacts(source_dir: str, mirror_dir: str) -> int:
+    """Atomically copy mutable metrics and new immutable artifacts to a mirror."""
+    source_dir = os.path.abspath(source_dir or ".")
+    mirror_dir = os.path.abspath(mirror_dir)
+    if source_dir == mirror_dir:
+        return 0
+    os.makedirs(mirror_dir, exist_ok=True)
+
+    copied = 0
+    for name in os.listdir(source_dir):
+        source = os.path.join(source_dir, name)
+        if not os.path.isfile(source):
+            continue
+        mutable = name == "latest.pt" or (
+            name.startswith("metrics") and name.endswith(".csv")
+        )
+        immutable = (
+            name.startswith(_SAMPLE_SHARD_PREFIX)
+            and name.endswith(_SAMPLE_SHARD_SUFFIX)
+        ) or (name.startswith("ckpt_iter_") and name.endswith(".pt"))
+        if not (mutable or immutable):
+            continue
+
+        destination = os.path.join(mirror_dir, name)
+        if (
+            immutable
+            and os.path.exists(destination)
+            and os.path.getsize(source) == os.path.getsize(destination)
+        ):
+            continue
+
+        fd, temp_path = tempfile.mkstemp(
+            dir=mirror_dir, prefix=f".{name}.", suffix=".tmp"
+        )
+        os.close(fd)
+        try:
+            shutil.copy2(source, temp_path)
+            os.replace(temp_path, destination)
+        except BaseException:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
+        copied += 1
+    return copied
 
 
 def _finite_csv_number(value: object) -> float | None:
@@ -1677,6 +1724,17 @@ def main() -> None:
     parser.add_argument("--reset-optimizer", action="store_true",
                         help="do not restore Adam state from checkpoint (fresh optimizer on resume)")
     parser.add_argument("--checkpoint-dir", default=None)
+    parser.add_argument(
+        "--mirror-checkpoint-dir",
+        default=None,
+        help="optional durable mirror for checkpoints, shards, and metrics",
+    )
+    parser.add_argument(
+        "--mirror-every",
+        type=int,
+        default=0,
+        help="mirror artifacts when iteration is divisible by this value (0=off)",
+    )
     # Per-iteration workload overrides (lower these for faster CPU iterations).
     parser.add_argument("--games", type=int, default=None, help="self-play games per iteration")
     parser.add_argument("--sims", type=int, default=None, help="MCTS sims/move")
@@ -2306,6 +2364,27 @@ def main() -> None:
                 buffer_min_iter=buffer_min_iter,
                 buffer_max_iter=buffer_max_iter,
             )
+
+            if (
+                args.mirror_checkpoint_dir
+                and args.mirror_every > 0
+                and it % args.mirror_every == 0
+            ):
+                try:
+                    mirrored = _mirror_training_artifacts(
+                        cfg.train.checkpoint_dir, args.mirror_checkpoint_dir
+                    )
+                    print(
+                        f"mirror iter {it}: synced {mirrored} artifacts -> "
+                        f"{args.mirror_checkpoint_dir}",
+                        flush=True,
+                    )
+                except OSError as exc:
+                    print(
+                        f"warning: mirror iter {it} failed ({exc}); "
+                        "training continues on local storage",
+                        flush=True,
+                    )
 
             if args.gate_every > 0 and it > 0 and it % args.gate_every == 0:
                 gate_sims = args.gate_sims if args.gate_sims is not None else sims
