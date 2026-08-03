@@ -696,17 +696,42 @@ def _flush_step_metrics(ckpt_dir: str, it: int, rows: list[tuple[int, dict[str, 
             )
 
 
-GATE_CSV_HEADER = (
-    "iter,prev_iter,games,games_played,"
-    "wins_as_white,wins_as_black,losses_as_white,losses_as_black,"
-    "draws_as_white,draws_as_black,"
-    "winrate,wins,draws,losses,mean_game_len,terminations,"
-    "elo,elo_lower,elo_upper,los,verdict\n"
+# Identity → game WDL → color splits → opening pairings → Elo/verdict → diagnostics.
+GATE_CSV_COLUMNS = (
+    "iter",
+    "prev_iter",
+    "games",
+    "games_played",
+    "wins",
+    "draws",
+    "losses",
+    "winrate",
+    "wins_as_white",
+    "wins_as_black",
+    "losses_as_white",
+    "losses_as_black",
+    "draws_as_white",
+    "draws_as_black",
+    "pairings",
+    "pair_wins",
+    "pair_draws",
+    "pair_losses",
+    "pair_winrate",
+    "elo",
+    "elo_lower",
+    "elo_upper",
+    "los",
+    "verdict",
+    "mean_game_len",
+    "terminations",
 )
+GATE_CSV_HEADER = ",".join(GATE_CSV_COLUMNS) + "\n"
 
 GATE_OPENINGS_CSV_HEADER = (
     "iter,prev_iter,game_idx,a_is_white,opening_uci,result,termination,plies\n"
 )
+
+_PAIR_POINTS = {"W": 1.0, "D": 0.5, "L": 0.0}
 
 
 def _elo_ci_verdict(elo_lower: float, elo_upper: float) -> str:
@@ -716,6 +741,52 @@ def _elo_ci_verdict(elo_lower: float, elo_upper: float) -> str:
     if elo_lower > 0:
         return "PASS"
     return "INCONCLUSIVE"
+
+
+def _pairing_stats(openings: list[dict]) -> dict[str, float | int]:
+    """Color-paired opening outcomes for masters-book gates.
+
+    Games are scheduled as ``opening_idx = game_idx // 2`` with
+    ``a_is_white = (game_idx % 2 == 0)``. Each complete pair (candidate as
+    White + as Black on the same line) scores W=1 / D=0.5 / L=0 per game.
+    Pairing WIN if total > 1.0 (e.g. win as White + draw as Black = 1.5),
+    DRAW if == 1.0, LOSS if < 1.0. Incomplete pairs (SPRT early stop) are
+    skipped. ``pair_winrate`` uses ``(W + 0.5 D) / N``.
+    """
+    by_pair: dict[int, dict[int, str]] = {}
+    for row in openings:
+        idx = int(row["game_idx"])
+        color = int(row["a_is_white"])
+        result = str(row["result"])
+        if result not in _PAIR_POINTS:
+            continue
+        by_pair.setdefault(idx // 2, {})[color] = result
+
+    pair_wins = 0
+    pair_draws = 0
+    pair_losses = 0
+    for colors in by_pair.values():
+        if 0 not in colors or 1 not in colors:
+            continue
+        score = _PAIR_POINTS[colors[1]] + _PAIR_POINTS[colors[0]]
+        if score > 1.0:
+            pair_wins += 1
+        elif score < 1.0:
+            pair_losses += 1
+        else:
+            pair_draws += 1
+
+    pairings = pair_wins + pair_draws + pair_losses
+    pair_winrate = (
+        (pair_wins + 0.5 * pair_draws) / pairings if pairings else float("nan")
+    )
+    return {
+        "pairings": pairings,
+        "pair_wins": pair_wins,
+        "pair_draws": pair_draws,
+        "pair_losses": pair_losses,
+        "pair_winrate": pair_winrate,
+    }
 
 
 def _atomic_append_csv_text(path: str, text: str, *, header: str) -> None:
@@ -809,6 +880,124 @@ def _log_anchor_metrics(ckpt_dir: str, it: int, anchor_iter: int,
         )
 
 
+def _pairing_field_values(openings: list[dict]) -> dict[str, str]:
+    """Pairing columns as CSV strings; empty when openings are unavailable."""
+    empty = {
+        "pairings": "",
+        "pair_wins": "",
+        "pair_draws": "",
+        "pair_losses": "",
+        "pair_winrate": "",
+    }
+    if not openings:
+        return empty
+    stats = _pairing_stats(openings)
+    pairings = int(stats["pairings"])
+    if pairings <= 0:
+        return {
+            "pairings": "0",
+            "pair_wins": "0",
+            "pair_draws": "0",
+            "pair_losses": "0",
+            "pair_winrate": "",
+        }
+    return {
+        "pairings": str(pairings),
+        "pair_wins": str(int(stats["pair_wins"])),
+        "pair_draws": str(int(stats["pair_draws"])),
+        "pair_losses": str(int(stats["pair_losses"])),
+        "pair_winrate": f"{float(stats['pair_winrate']):.6f}",
+    }
+
+
+def _format_gate_csv_line(row: dict[str, object]) -> str:
+    return ",".join(str(row.get(col, "")) for col in GATE_CSV_COLUMNS) + "\n"
+
+
+def _openings_for_gate_backfill(
+    openings_rows: list[dict[str, str]],
+    iter_: str,
+    prev_iter: str,
+    games_played: int,
+) -> list[dict]:
+    """Openings for one gate row; trailing ``games_played`` rows if re-run."""
+    matched = [
+        r
+        for r in openings_rows
+        if r["iter"] == iter_ and r["prev_iter"] == prev_iter
+    ]
+    if not matched or games_played <= 0:
+        return []
+    if len(matched) > games_played:
+        matched = matched[-games_played:]
+    return [
+        {
+            "game_idx": int(r["game_idx"]),
+            "a_is_white": int(r["a_is_white"]),
+            "result": r["result"],
+        }
+        for r in matched
+    ]
+
+
+def backfill_gate_pairings(ckpt_dir: str) -> tuple[int, int]:
+    """Rewrite metrics_gates.csv with pairing columns / current column order.
+
+    Returns ``(filled, empty)`` row counts. Empty when no openings log exists
+    for that gate (early pre-book rows).
+    """
+    ckpt_dir = ckpt_dir or "."
+    gates_path = os.path.join(ckpt_dir, "metrics_gates.csv")
+    openings_path = os.path.join(ckpt_dir, "metrics_gates_openings.csv")
+    if not os.path.exists(gates_path):
+        raise FileNotFoundError(gates_path)
+
+    with open(gates_path, encoding="utf-8", newline="") as f:
+        gate_rows = list(csv.DictReader(f))
+    openings_rows: list[dict[str, str]] = []
+    if os.path.exists(openings_path):
+        with open(openings_path, encoding="utf-8", newline="") as f:
+            openings_rows = list(csv.DictReader(f))
+
+    filled = 0
+    empty = 0
+    out_lines = [GATE_CSV_HEADER]
+    for row in gate_rows:
+        games_played = int(float(row.get("games_played") or 0))
+        openings = _openings_for_gate_backfill(
+            openings_rows,
+            row["iter"],
+            row["prev_iter"],
+            games_played,
+        )
+        out_row = {col: row.get(col, "") for col in GATE_CSV_COLUMNS}
+        # Recompute pairings from openings when available; otherwise keep
+        # existing pairing cells (or blanks for pre-book gates).
+        if openings:
+            out_row.update(_pairing_field_values(openings))
+            filled += 1
+        elif not str(out_row.get("pairings") or "").strip():
+            out_row.update(_pairing_field_values([]))
+            empty += 1
+        else:
+            filled += 1
+        out_lines.append(_format_gate_csv_line(out_row))
+
+    directory = os.path.dirname(gates_path) or "."
+    fd, temp_path = tempfile.mkstemp(dir=directory, suffix=".csv.tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.writelines(out_lines)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, gates_path)
+    except BaseException:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
+    return filled, empty
+
+
 def _log_gate_metrics(ckpt_dir: str, it: int, prev_it: int, metrics: dict, games: int) -> None:
     os.makedirs(ckpt_dir or ".", exist_ok=True)
     path = os.path.join(ckpt_dir, "metrics_gates.csv")
@@ -820,16 +1009,33 @@ def _log_gate_metrics(ckpt_dir: str, it: int, prev_it: int, metrics: dict, games
     elo, elo_lower, elo_upper, los = sprt_elo(wins, draws, losses)
     verdict = _elo_ci_verdict(elo_lower, elo_upper)
 
-    gate_line = (
-        f"{it},{prev_it},{games},{games_played},"
-        f"{metrics['wins_as_white']},{metrics['wins_as_black']},"
-        f"{metrics['losses_as_white']},{metrics['losses_as_black']},"
-        f"{metrics['draws_as_white']},{metrics['draws_as_black']},"
-        f"{metrics['winrate']:.6f},{wins},{draws},{losses},"
-        f"{metrics['mean_game_len']:.2f},{metrics['terminations']},"
-        f"{elo:.2f},{elo_lower:.2f},{elo_upper:.2f},{los:.6f},"
-        f"{verdict}\n"
-    )
+    openings = list(metrics.get("openings") or [])
+    openings.sort(key=lambda row: int(row.get("game_idx", 0)))
+    gate_row = {
+        "iter": it,
+        "prev_iter": prev_it,
+        "games": games,
+        "games_played": games_played,
+        "wins": wins,
+        "draws": draws,
+        "losses": losses,
+        "winrate": f"{metrics['winrate']:.6f}",
+        "wins_as_white": metrics["wins_as_white"],
+        "wins_as_black": metrics["wins_as_black"],
+        "losses_as_white": metrics["losses_as_white"],
+        "losses_as_black": metrics["losses_as_black"],
+        "draws_as_white": metrics["draws_as_white"],
+        "draws_as_black": metrics["draws_as_black"],
+        "elo": f"{elo:.2f}",
+        "elo_lower": f"{elo_lower:.2f}",
+        "elo_upper": f"{elo_upper:.2f}",
+        "los": f"{los:.6f}",
+        "verdict": verdict,
+        "mean_game_len": f"{metrics['mean_game_len']:.2f}",
+        "terminations": metrics["terminations"],
+    }
+    gate_row.update(_pairing_field_values(openings))
+    gate_line = _format_gate_csv_line(gate_row)
     _atomic_append_csv_text(path, gate_line, header=GATE_CSV_HEADER)
 
     with open(path, encoding="utf-8") as f:
@@ -841,8 +1047,6 @@ def _log_gate_metrics(ckpt_dir: str, it: int, prev_it: int, metrics: dict, games
     print(f"gate metrics logged: {it} vs {prev_it} -> {path}", flush=True)
     print(f"gate metrics last row: {last}", flush=True)
 
-    openings = list(metrics.get("openings") or [])
-    openings.sort(key=lambda row: int(row.get("game_idx", 0)))
     if openings:
         openings_path = os.path.join(ckpt_dir, "metrics_gates_openings.csv")
         opening_lines = "".join(
@@ -862,6 +1066,15 @@ def _log_gate_metrics(ckpt_dir: str, it: int, prev_it: int, metrics: dict, games
         ),
         flush=True,
     )
+    if openings:
+        pstats = _pairing_stats(openings)
+        print(
+            f"gate pairings: n={int(pstats['pairings'])} "
+            f"WDL={int(pstats['pair_wins'])}/{int(pstats['pair_draws'])}/"
+            f"{int(pstats['pair_losses'])} "
+            f"pair_winrate={float(pstats['pair_winrate']):.4f}",
+            flush=True,
+        )
 
 
 def _opening_summary(openings: list[dict], *, book_lines: int | None = None) -> str:
