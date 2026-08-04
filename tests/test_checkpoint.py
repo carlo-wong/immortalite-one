@@ -135,6 +135,27 @@ def test_warm_replay_buffer_uses_newest_shards_only(tmp_path) -> None:
     assert [s.source_iter for s in buffer] == [3, 4]
 
 
+def test_warm_replay_buffer_ignores_shards_newer_than_resume_checkpoint(tmp_path) -> None:
+    ckpt_dir = str(tmp_path)
+    for iteration in range(618, 641):
+        sample = _fake_sample()
+        sample.source_iter = iteration
+        _save_sample_shard(ckpt_dir, iteration, [sample], value_target="root_q")
+
+    buffer: deque[Sample] = deque(maxlen=100)
+    loaded = _warm_replay_buffer(
+        buffer,
+        ckpt_dir,
+        replay_window=100,
+        expected_value_target="root_q",
+        max_shards=0,
+        max_source_iter=620,
+    )
+
+    assert loaded == 3
+    assert [sample.source_iter for sample in buffer] == [618, 619, 620]
+
+
 def test_warm_replay_buffer_fills_beyond_old_twenty_shard_cap(tmp_path) -> None:
     """Default warm must keep loading until the window is full (no silent 20-shard stop)."""
     ckpt_dir = str(tmp_path)

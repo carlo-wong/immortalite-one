@@ -101,6 +101,7 @@ TRAINING_METRICS_COLUMNS = (
     "move_temperature",
     "move_temperature_plies",
     "random_opening_plies",
+    "random_opening_probability",
 )
 
 PERFORMANCE_METRICS_COLUMNS = (
@@ -452,6 +453,26 @@ def _append_metrics_csv(
     if not new:
         with open(path, encoding="utf-8", newline="") as f:
             existing_header = next(csv.reader(f), [])
+        prior_training_columns = [
+            column for column in columns if column != "random_opening_probability"
+        ]
+        if (
+            os.path.basename(path) == "metrics_training.csv"
+            and existing_header == prior_training_columns
+        ):
+            with open(path, encoding="utf-8", newline="") as f:
+                existing_rows = list(csv.DictReader(f))
+            for existing in existing_rows:
+                try:
+                    has_prefix = float(existing.get("random_opening_plies", "") or 0) > 0
+                except ValueError:
+                    has_prefix = False
+                existing["random_opening_probability"] = (
+                    "1.000000" if has_prefix else "0.000000"
+                )
+            staged = _stage_csv(os.path.dirname(path) or ".", columns, existing_rows)
+            os.replace(staged, path)
+            existing_header = list(columns)
         if existing_header != list(columns):
             raise RuntimeError(f"unexpected metrics header in {path}")
     with open(path, "a", encoding="utf-8", newline="") as f:
@@ -488,7 +509,8 @@ def _log_metrics(ckpt_dir: str, it: int, sims: int, samples: int, dt: float, *,
                  policy_surprise_data_weight: float, c_puct: float,
                  dirichlet_alpha: float, dirichlet_epsilon: float,
                  move_temperature: float, move_temperature_plies: int,
-                 random_opening_plies: int, selfplay_concurrency: int,
+                 random_opening_plies: int, random_opening_probability: float,
+                 selfplay_concurrency: int,
                  selfplay_workers: int, central_inference: bool, device: str,
                  net_blocks: int, net_filters: int,
                  winrate_quick: float = float("nan"),
@@ -534,6 +556,7 @@ def _log_metrics(ckpt_dir: str, it: int, sims: int, samples: int, dt: float, *,
         "move_temperature": f"{move_temperature:.6f}",
         "move_temperature_plies": move_temperature_plies,
         "random_opening_plies": random_opening_plies,
+        "random_opening_probability": f"{random_opening_probability:.6f}",
     }
     overhead = (
         f"{dt - selfplay_seconds - train_seconds:.1f}"
@@ -1178,6 +1201,7 @@ def play_match(net_a: ChessNet, net_b: ChessNet, cfg: Config,
     match_cfg.train.move_temperature_plies = 0
     # Gates use their own opening book; never inherit SP random prefixes.
     match_cfg.train.random_opening_plies = 0
+    match_cfg.train.random_opening_probability = 0.0
     if concurrency is not None:
         match_cfg.train.selfplay_concurrency = concurrency
 
@@ -1695,6 +1719,7 @@ def _warm_replay_buffer(
     *,
     expected_value_target: str | None = None,
     max_shards: int = _REPLAY_WARM_MAX_SHARDS,
+    max_source_iter: int | None = None,
 ) -> int:
     """Fill ``buffer`` from newest ``samples_iter_*.npz`` shards until full.
 
@@ -1720,6 +1745,17 @@ def _warm_replay_buffer(
         if remaining <= 0:
             break
         shards = _list_sample_shards(ckpt_dir)
+        if max_source_iter is not None:
+            shards = [
+                path
+                for path in shards
+                if int(
+                    os.path.basename(path)[
+                        len(_SAMPLE_SHARD_PREFIX) : -len(_SAMPLE_SHARD_SUFFIX)
+                    ]
+                )
+                <= max_source_iter
+            ]
         recent = list(reversed(shards))
         if max_shards > 0:
             recent = recent[:max_shards]
@@ -1949,6 +1985,13 @@ def main() -> None:
         help="self-play only: force first N plies with uniform-random legal moves "
              "(0=off; prefix writes no training samples; gates keep their own book)",
     )
+    parser.add_argument(
+        "--random-opening-probability",
+        type=float,
+        default=None,
+        help="fraction of self-play games receiving the uniform-legal prefix "
+             "(default 1.0 preserves all-games behavior)",
+    )
     args = parser.parse_args()
 
     # Fall back to CPU if CUDA was requested but isn't available in this runtime.
@@ -2056,6 +2099,10 @@ def main() -> None:
     cfg.train.move_temperature_plies = max(0, int(args.move_temperature_plies))
     if args.random_opening_plies is not None:
         cfg.train.random_opening_plies = max(0, int(args.random_opening_plies))
+    if args.random_opening_probability is not None:
+        cfg.train.random_opening_probability = float(args.random_opening_probability)
+    if not 0.0 <= cfg.train.random_opening_probability <= 1.0:
+        raise ValueError("--random-opening-probability must be in [0, 1]")
     args.gate_exploration_moves = max(0, int(args.gate_exploration_moves))
     from engine.openings import load_default_gate_openings, load_opening_book
 
@@ -2097,6 +2144,7 @@ def main() -> None:
         f"move_temperature={cfg.train.move_temperature:.3f} "
         f"move_temperature_plies={cfg.train.move_temperature_plies} "
         f"random_opening_plies={cfg.train.random_opening_plies} "
+        f"random_opening_probability={cfg.train.random_opening_probability:.3f} "
         f"gate_games={args.gate_games} "
         f"gate_sims={args.gate_sims if args.gate_sims is not None else 'match-selfplay'} "
         f"gate_exploration_moves={args.gate_exploration_moves} "
@@ -2168,6 +2216,7 @@ def main() -> None:
         cfg.train.checkpoint_dir,
         cfg.train.replay_window,
         expected_value_target=cfg.train.value_target,
+        max_source_iter=start_iter - 1 if start_iter > 0 else None,
     )
     _require_warm_buffer_fill(
         loaded,
@@ -2256,7 +2305,7 @@ def main() -> None:
                 if game.moves:
                     first_moves.append(game.moves[0])  # White first ply
                 if prefix_plies > 0:
-                    free = diversity_move_uci(game.moves, prefix_plies)
+                    free = diversity_move_uci(game.moves, game.opening_prefix_plies)
                     if free is not None:
                         free_moves.append(free)
                 game_bar.set_postfix(moves=len(game.samples), buffer=len(buffer))
@@ -2475,6 +2524,7 @@ def main() -> None:
                 move_temperature=cfg.train.move_temperature,
                 move_temperature_plies=cfg.train.move_temperature_plies,
                 random_opening_plies=cfg.train.random_opening_plies,
+                random_opening_probability=cfg.train.random_opening_probability,
                 selfplay_concurrency=cfg.train.selfplay_concurrency,
                 selfplay_workers=args.selfplay_workers,
                 central_inference=central_inference,

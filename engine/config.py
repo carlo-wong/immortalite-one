@@ -88,8 +88,10 @@ class TrainConfig:
     move_temperature_plies: int = 0     # 0 = disabled; apply T while move_count < this
     # Self-play only: force the first N plies with uniform-random legal moves
     # (zero human knowledge). Prefix plies write no training samples; MCTS starts
-    # after the prefix. Gates must keep this at 0 (they use their own book).
+    # after the prefix. Probability preserves start-position training mass;
+    # 1.0 retains the historical all-games behavior. Gates keep both disabled.
     random_opening_plies: int = 0
+    random_opening_probability: float = 1.0
     # KataGo-style write-time policy surprise weight alpha in [0, 1].
     # 0 = off (uniform). 0.5 = half uniform / half proportional to KL(target||prior).
     policy_surprise_data_weight: float = 0.0

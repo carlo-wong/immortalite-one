@@ -39,12 +39,29 @@ _EXPLORATION_MOVES = 20  # sample from the policy for this many plies, then argm
 GATE_OPENING_PLIES = 8
 
 
-def _selfplay_start_moves(cfg: Config, num_games: int) -> list[list[str]] | None:
-    """Build per-game forced prefixes for self-play, or None when disabled."""
+def _selfplay_start_moves(
+    cfg: Config,
+    num_games: int,
+    *,
+    rng: np.random.Generator | None = None,
+) -> list[list[str]] | None:
+    """Build optional per-game uniform-legal prefixes for self-play."""
     plies = int(cfg.train.random_opening_plies)
     if plies <= 0 or num_games <= 0:
         return None
-    return random_legal_opening_prefixes(num_games, plies)
+    probability = float(cfg.train.random_opening_probability)
+    if not 0.0 <= probability <= 1.0:
+        raise ValueError("random_opening_probability must be in [0, 1]")
+    if probability <= 0.0:
+        return None
+    if rng is None:
+        rng = np.random.default_rng()
+    selected = rng.random(num_games) < probability
+    count = int(selected.sum())
+    if count == 0:
+        return [[] for _ in range(num_games)]
+    prefixes = iter(random_legal_opening_prefixes(count, plies, rng=rng))
+    return [next(prefixes) if enabled else [] for enabled in selected]
 
 
 def _prefer_native_selfplay() -> bool:
@@ -203,6 +220,7 @@ class GameResult:
     # sample.value — that breaks when value_target=root_q (per-ply search Q).
     winner: chess.Color | None = None
     moves: list[str] = field(default_factory=list)  # UCI moves played
+    opening_prefix_plies: int = 0
 
 
 _DRAW_TERMINATION_NAMES = {
@@ -373,7 +391,13 @@ def play_game_gen(cfg: Config, simulations: int, *, add_noise: bool = True,
             winner = None
     else:
         winner = None
-    return GameResult(samples=samples, termination=termination, winner=winner, moves=moves)
+    return GameResult(
+        samples=samples,
+        termination=termination,
+        winner=winner,
+        moves=moves,
+        opening_prefix_plies=len(start_moves or []),
+    )
 
 
 def _gate_result_letter(winner: int, a_is_white: bool) -> str:
@@ -631,6 +655,9 @@ def play_games_batched_native_actors(
                 termination=str(meta["termination"]),
                 winner=None if winner_value < 0 else _color_from_native(winner_value),
                 moves=list(meta["moves"]),
+                opening_prefix_plies=(
+                    len(start_moves[int(meta["actor_id"])]) if start_moves is not None else 0
+                ),
             )
             completed.append(game)
             if on_game_finished is not None:
@@ -1042,6 +1069,7 @@ def _config_to_dict(cfg: Config) -> dict:
             "move_temperature": cfg.train.move_temperature,
             "move_temperature_plies": cfg.train.move_temperature_plies,
             "random_opening_plies": cfg.train.random_opening_plies,
+            "random_opening_probability": cfg.train.random_opening_probability,
             "policy_surprise_data_weight": cfg.train.policy_surprise_data_weight,
         },
     }
@@ -1141,8 +1169,6 @@ def _selfplay_worker_run(payload: dict) -> tuple[
     first_moves: list[str] = []
     free_moves: list[str] = []
     games_done = payload.get("games_done")
-    prefix_plies = int(cfg.train.random_opening_plies)
-
     def _on_game(game: GameResult) -> None:
         # Length metrics stay 1:1 with plies; surprise replication is train-only.
         game_lengths.append(len(game.samples))
@@ -1154,8 +1180,8 @@ def _selfplay_worker_run(payload: dict) -> tuple[
         game_outcomes.append(_winner_of_worker(game))
         if game.moves:
             first_moves.append(game.moves[0])  # White first ply (may be forced prefix)
-        free = diversity_move_uci(game.moves, prefix_plies)
-        if free is not None and prefix_plies > 0:
+        free = diversity_move_uci(game.moves, game.opening_prefix_plies)
+        if free is not None and cfg.train.random_opening_plies > 0:
             free_moves.append(free)
         if games_done is not None:
             games_done.value += 1

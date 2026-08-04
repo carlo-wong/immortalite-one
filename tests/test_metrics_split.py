@@ -24,6 +24,7 @@ EXPECTED_TRAINING_COLUMNS = (
     "value_coef", "policy_surprise_data_weight", "c_puct",
     "dirichlet_alpha", "dirichlet_epsilon", "move_temperature",
     "move_temperature_plies", "random_opening_plies",
+    "random_opening_probability",
 )
 
 EXPECTED_PERFORMANCE_COLUMNS = (
@@ -114,6 +115,7 @@ def _log_fresh_metrics(checkpoint_dir: str) -> None:
         move_temperature=1.1,
         move_temperature_plies=12,
         random_opening_plies=4,
+        random_opening_probability=0.3,
         selfplay_concurrency=16,
         selfplay_workers=3,
         central_inference=True,
@@ -225,6 +227,7 @@ def test_fresh_append_logs_recipe_runtime_and_rates(tmp_path) -> None:
     assert train_row["move_temperature"] == "1.100000"
     assert train_row["move_temperature_plies"] == "12"
     assert train_row["random_opening_plies"] == "4"
+    assert train_row["random_opening_probability"] == "0.300000"
     assert train_row["terminations"] == "checkmate:10;draw:2"
 
     perf_row = performance[0]
@@ -240,3 +243,32 @@ def test_fresh_append_logs_recipe_runtime_and_rates(tmp_path) -> None:
     assert float(perf_row["selfplay_games_per_hour"]) == pytest.approx(480.0)
     assert float(perf_row["selfplay_samples_per_second"]) == pytest.approx(8 / 3)
     assert float(perf_row["train_steps_per_second"]) == pytest.approx(2.0)
+
+
+def test_append_upgrades_prior_training_header_with_opening_probability(tmp_path) -> None:
+    path = tmp_path / "metrics_training.csv"
+    prior_columns = [
+        column
+        for column in EXPECTED_TRAINING_COLUMNS
+        if column != "random_opening_probability"
+    ]
+    prior_row = {column: "" for column in prior_columns}
+    prior_row.update({"iter": "8", "random_opening_plies": "1"})
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=prior_columns, lineterminator="\n")
+        writer.writeheader()
+        writer.writerow(prior_row)
+    with (tmp_path / "metrics_performance.csv").open(
+        "w", encoding="utf-8", newline=""
+    ) as handle:
+        csv.DictWriter(
+            handle, fieldnames=EXPECTED_PERFORMANCE_COLUMNS, lineterminator="\n"
+        ).writeheader()
+
+    _log_fresh_metrics(str(tmp_path))
+
+    header, rows = _read_csv(path)
+    assert header == list(EXPECTED_TRAINING_COLUMNS)
+    assert [row["iter"] for row in rows] == ["8", "9"]
+    assert rows[0]["random_opening_probability"] == "1.000000"
+    assert rows[1]["random_opening_probability"] == "0.300000"
