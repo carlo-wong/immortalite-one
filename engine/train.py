@@ -1651,6 +1651,13 @@ _REPLAY_WARM_MAX_SHARDS = 0
 _REPLAY_WARM_MIN_FILL_RATIO = 0.85
 _REPLAY_WARM_LIST_ATTEMPTS = 2
 _REPLAY_WARM_SHARD_RETRIES = 2
+# After Drive dies, FUSE often still listdir()'s ghost names that then ENOENT.
+# Bail after this many consecutive missing/unreadable shards once we have begun.
+_REPLAY_WARM_MAX_CONSECUTIVE_EMPTY = 8
+
+
+class DriveDisconnectedError(RuntimeError):
+    """Colab/Drive FUSE transport died while reading replay shards."""
 
 
 def _load_sample_shard_with_retry(
@@ -1659,8 +1666,9 @@ def _load_sample_shard_with_retry(
     expected_value_target: str | None = None,
     retries: int = _REPLAY_WARM_SHARD_RETRIES,
 ) -> list[Sample]:
-    """Load one shard; retry transient Drive/FUSE disconnects instead of aborting warm-up."""
+    """Load one shard; retry brief FUSE blips, then fail closed on disconnect."""
     attempts = max(1, int(retries) + 1)
+    last_exc: OSError | None = None
     for attempt in range(attempts):
         try:
             return _load_sample_shard(
@@ -1669,15 +1677,15 @@ def _load_sample_shard_with_retry(
         except OSError as exc:
             if not _is_transport_disconnect(exc):
                 raise
-            if attempt + 1 >= attempts:
-                print(
-                    f"warning: skipping shard after Drive disconnect "
-                    f"({os.path.basename(path)}: {exc})",
-                    flush=True,
-                )
-                return []
-            time.sleep(0.05 * (attempt + 1))
-    return []
+            last_exc = exc
+            if attempt + 1 < attempts:
+                time.sleep(0.05 * (attempt + 1))
+    assert last_exc is not None
+    raise DriveDisconnectedError(
+        f"Drive disconnected while reading {os.path.basename(path)} ({last_exc}). "
+        f"Remount Drive (Colab cell 5 / force remount) and re-run training. "
+        f"Do not pass --allow-cold-buffer — that recreates the tip-621 cold-buffer dud."
+    ) from last_exc
 
 
 def _warm_replay_buffer(
@@ -1691,9 +1699,8 @@ def _warm_replay_buffer(
     """Fill ``buffer`` from newest ``samples_iter_*.npz`` shards until full.
 
     Loads newest→oldest until ``min(maxlen, replay_window)`` samples are in hand
-    (or shards are exhausted). Does **not** stop early after a fixed shard count
-    by default, and does **not** abort the whole warm-up on a single Drive
-    disconnect — that shard is skipped/retried and older shards still load.
+    (or shards are exhausted). A Drive/FUSE disconnect fails fast with
+    ``DriveDisconnectedError`` instead of walking hundreds of ghost paths.
     """
     if replay_window <= 0:
         return 0
@@ -1707,6 +1714,7 @@ def _warm_replay_buffer(
     tried: set[str] = set()
     opened = 0
     skipped_empty = 0
+    consecutive_empty = 0
 
     for list_attempt in range(_REPLAY_WARM_LIST_ATTEMPTS):
         if remaining <= 0:
@@ -1722,13 +1730,39 @@ def _warm_replay_buffer(
             if path in tried:
                 continue
             tried.add(path)
-            shard_samples = _load_sample_shard_with_retry(
-                path, expected_value_target=expected_value_target
-            )
+            try:
+                shard_samples = _load_sample_shard_with_retry(
+                    path, expected_value_target=expected_value_target
+                )
+            except DriveDisconnectedError as exc:
+                loaded_so_far = target - remaining
+                raise DriveDisconnectedError(
+                    f"{exc} Already loaded {loaded_so_far}/{target} samples "
+                    f"from {len(chosen_chunks)} shard(s) before disconnect."
+                ) from exc
             opened += 1
             if not shard_samples:
                 skipped_empty += 1
+                consecutive_empty += 1
+                # After a partial FUSE death, listdir still returns names that
+                # ENOENT — stop instead of spamming hundreds of warnings.
+                if (
+                    consecutive_empty >= _REPLAY_WARM_MAX_CONSECUTIVE_EMPTY
+                    and chosen_chunks
+                    and remaining > 0
+                ):
+                    newest = chosen_chunks[0][0].source_iter
+                    oldest = chosen_chunks[-1][0].source_iter
+                    raise RuntimeError(
+                        f"replay warm-up hit {consecutive_empty} consecutive "
+                        f"unreadable shards under {ckpt_dir} after loading "
+                        f"{target - remaining}/{target} samples "
+                        f"(source_iter {oldest}..{newest}). "
+                        f"Drive mount is likely stale — remount and re-run; "
+                        f"do not use --allow-cold-buffer."
+                    )
                 continue
+            consecutive_empty = 0
             if len(shard_samples) > remaining:
                 shard_samples = shard_samples[-remaining:]
             chosen_chunks.append(shard_samples)
@@ -1790,7 +1824,8 @@ def _require_warm_buffer_fill(
         f"resume warm-up loaded {loaded}/{target} samples "
         f"(need >={need}, {min_fill_ratio:.0%} of target) from {ckpt_dir} "
         f"({n_shards} shard file(s) visible). Refusing to train on a cold "
-        f"replay buffer — sync samples_iter_*.npz or pass --allow-cold-buffer."
+        f"replay buffer. If you saw Drive disconnect / ENOENT spam, remount "
+        f"Drive and re-run — do not pass --allow-cold-buffer."
     )
 
 

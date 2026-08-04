@@ -14,6 +14,7 @@ from engine.encoding import ENCODING_VERSION, POLICY_SIZE
 from engine.network import ChessNet
 from engine.selfplay import Sample
 from engine.train import (
+    DriveDisconnectedError,
     _load_sample_shard,
     _require_value_target_compat,
     _require_warm_buffer_fill,
@@ -160,7 +161,7 @@ def test_warm_replay_buffer_fills_beyond_old_twenty_shard_cap(tmp_path) -> None:
     assert min(s.source_iter for s in buffer) >= 5
 
 
-def test_warm_replay_skips_disconnect_and_continues(
+def test_warm_replay_fails_fast_on_drive_disconnect(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ckpt_dir = str(tmp_path)
@@ -170,29 +171,24 @@ def test_warm_replay_skips_disconnect_and_continues(
         _save_sample_shard(ckpt_dir, iteration, [sample], value_target="root_q")
 
     real_load = __import__("engine.train", fromlist=["_load_sample_shard"])._load_sample_shard
-    calls = {"n": 0}
 
     def flaky_load(path: str, *, expected_value_target: str | None = None):
-        calls["n"] += 1
-        # Fail the newest shard (iter 2) with a Drive disconnect once per retry budget.
-        if path.endswith("samples_iter_0002.npz"):
+        # Newest shard loads; next one kills FUSE — must not walk the rest.
+        if path.endswith("samples_iter_0001.npz"):
             raise OSError(107, "Transport endpoint is not connected")
         return real_load(path, expected_value_target=expected_value_target)
 
     monkeypatch.setattr("engine.train._load_sample_shard", flaky_load)
 
     buffer: deque[Sample] = deque(maxlen=10)
-    loaded = _warm_replay_buffer(
-        buffer,
-        ckpt_dir,
-        replay_window=10,
-        expected_value_target="root_q",
-        max_shards=0,
-    )
-
-    assert loaded == 2
-    assert [s.source_iter for s in buffer] == [0, 1]
-    assert calls["n"] >= 3  # retries on the bad shard + older shards
+    with pytest.raises(DriveDisconnectedError, match="Remount Drive"):
+        _warm_replay_buffer(
+            buffer,
+            ckpt_dir,
+            replay_window=10,
+            expected_value_target="root_q",
+            max_shards=0,
+        )
 
 
 def test_require_warm_buffer_fill_blocks_cold_resume(tmp_path) -> None:
