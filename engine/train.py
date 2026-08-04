@@ -1643,9 +1643,41 @@ def _load_sample_shard(
         return []
 
 
-# Cap how many newest shards resume warm-up will open. Avoids scanning hundreds of
-# Drive files on Colab after a cold FUSE mount; still fills toward replay_window.
-_REPLAY_WARM_MAX_SHARDS = 20
+# 0 = no shard cap: keep opening newest→oldest until the buffer target is full.
+# A positive cap is only for tests / explicit overrides. The old default of 20
+# (plus abort-on-Drive-disconnect) could leave a cold buffer after a partial
+# remount and then silently train on it — that mode is what collapsed tip 621.
+_REPLAY_WARM_MAX_SHARDS = 0
+_REPLAY_WARM_MIN_FILL_RATIO = 0.85
+_REPLAY_WARM_LIST_ATTEMPTS = 2
+_REPLAY_WARM_SHARD_RETRIES = 2
+
+
+def _load_sample_shard_with_retry(
+    path: str,
+    *,
+    expected_value_target: str | None = None,
+    retries: int = _REPLAY_WARM_SHARD_RETRIES,
+) -> list[Sample]:
+    """Load one shard; retry transient Drive/FUSE disconnects instead of aborting warm-up."""
+    attempts = max(1, int(retries) + 1)
+    for attempt in range(attempts):
+        try:
+            return _load_sample_shard(
+                path, expected_value_target=expected_value_target
+            )
+        except OSError as exc:
+            if not _is_transport_disconnect(exc):
+                raise
+            if attempt + 1 >= attempts:
+                print(
+                    f"warning: skipping shard after Drive disconnect "
+                    f"({os.path.basename(path)}: {exc})",
+                    flush=True,
+                )
+                return []
+            time.sleep(0.05 * (attempt + 1))
+    return []
 
 
 def _warm_replay_buffer(
@@ -1656,6 +1688,13 @@ def _warm_replay_buffer(
     expected_value_target: str | None = None,
     max_shards: int = _REPLAY_WARM_MAX_SHARDS,
 ) -> int:
+    """Fill ``buffer`` from newest ``samples_iter_*.npz`` shards until full.
+
+    Loads newest→oldest until ``min(maxlen, replay_window)`` samples are in hand
+    (or shards are exhausted). Does **not** stop early after a fixed shard count
+    by default, and does **not** abort the whole warm-up on a single Drive
+    disconnect — that shard is skipped/retried and older shards still load.
+    """
     if replay_window <= 0:
         return 0
     maxlen = buffer.maxlen if buffer.maxlen is not None else replay_window
@@ -1663,42 +1702,96 @@ def _warm_replay_buffer(
     if target <= 0:
         return 0
 
-    shards = _list_sample_shards(ckpt_dir)
-    # Newest first, then stop after max_shards or when the window is full.
-    recent = list(reversed(shards))
-    if max_shards > 0:
-        recent = recent[:max_shards]
     chosen_chunks: list[list[Sample]] = []
     remaining = target
-    for path in recent:
+    tried: set[str] = set()
+    opened = 0
+    skipped_empty = 0
+
+    for list_attempt in range(_REPLAY_WARM_LIST_ATTEMPTS):
         if remaining <= 0:
             break
-        try:
-            shard_samples = _load_sample_shard(
+        shards = _list_sample_shards(ckpt_dir)
+        recent = list(reversed(shards))
+        if max_shards > 0:
+            recent = recent[:max_shards]
+        progress = False
+        for path in recent:
+            if remaining <= 0:
+                break
+            if path in tried:
+                continue
+            tried.add(path)
+            shard_samples = _load_sample_shard_with_retry(
                 path, expected_value_target=expected_value_target
             )
-        except OSError as exc:
-            if _is_transport_disconnect(exc):
-                print(
-                    f"warning: stopping replay warm-up after Drive disconnect "
-                    f"({os.path.basename(path)}: {exc})",
-                    flush=True,
-                )
-                break
-            raise
-        if not shard_samples:
-            continue
-        if len(shard_samples) > remaining:
-            shard_samples = shard_samples[-remaining:]
-        chosen_chunks.append(shard_samples)
-        remaining -= len(shard_samples)
+            opened += 1
+            if not shard_samples:
+                skipped_empty += 1
+                continue
+            if len(shard_samples) > remaining:
+                shard_samples = shard_samples[-remaining:]
+            chosen_chunks.append(shard_samples)
+            remaining -= len(shard_samples)
+            progress = True
+        if remaining <= 0:
+            break
+        if list_attempt + 1 < _REPLAY_WARM_LIST_ATTEMPTS and (
+            progress or not tried
+        ):
+            # Cold FUSE mounts sometimes list only a subset on the first pass.
+            print(
+                f"warning: replay warm-up underfilled "
+                f"({target - remaining}/{target}); re-listing shards "
+                f"in {ckpt_dir}",
+                flush=True,
+            )
+            time.sleep(0.1)
 
     loaded = 0
     for chunk in reversed(chosen_chunks):
         for sample in chunk:
             buffer.append(sample)
             loaded += 1
+    if loaded:
+        src_min = min(s.source_iter for s in buffer)
+        src_max = max(s.source_iter for s in buffer)
+        print(
+            f"replay warm-up: loaded {loaded}/{target} samples from "
+            f"{len(chosen_chunks)} shards "
+            f"(opened={opened}, skipped_empty={skipped_empty}, "
+            f"source_iter={src_min}..{src_max})",
+            flush=True,
+        )
     return loaded
+
+
+def _require_warm_buffer_fill(
+    loaded: int,
+    *,
+    replay_buffer_size: int,
+    replay_window: int,
+    start_iter: int,
+    allow_cold: bool,
+    ckpt_dir: str,
+    min_fill_ratio: float = _REPLAY_WARM_MIN_FILL_RATIO,
+) -> None:
+    """On resume, refuse to train if shard warm-up left the buffer cold."""
+    if allow_cold or start_iter <= 0:
+        return
+    target = min(int(replay_buffer_size), int(replay_window))
+    if target <= 0:
+        return
+    need = int(math.ceil(float(min_fill_ratio) * target))
+    if loaded >= need:
+        return
+    n_shards = len(_list_sample_shards(ckpt_dir))
+    raise RuntimeError(
+        f"resume warm-up loaded {loaded}/{target} samples "
+        f"(need >={need}, {min_fill_ratio:.0%} of target) from {ckpt_dir} "
+        f"({n_shards} shard file(s) visible). Refusing to train on a cold "
+        f"replay buffer — sync samples_iter_*.npz or pass --allow-cold-buffer."
+    )
 
 
 def main() -> None:
@@ -1771,6 +1864,12 @@ def main() -> None:
                         help="override training minibatch size")
     parser.add_argument("--replay-buffer", type=int, default=None,
                         help="override in-memory replay buffer size")
+    parser.add_argument(
+        "--allow-cold-buffer",
+        action="store_true",
+        help="on resume, allow training even if shard warm-up filled <85% of "
+             "min(replay_buffer, replay_window); default is to abort",
+    )
     parser.add_argument("--gate-every", type=int, default=0,
                         help="run strength gate every N iterations (0 = off)")
     parser.add_argument("--gate-games", type=int, default=30,
@@ -2035,8 +2134,22 @@ def main() -> None:
         cfg.train.replay_window,
         expected_value_target=cfg.train.value_target,
     )
+    _require_warm_buffer_fill(
+        loaded,
+        replay_buffer_size=cfg.train.replay_buffer_size,
+        replay_window=cfg.train.replay_window,
+        start_iter=start_iter,
+        allow_cold=bool(args.allow_cold_buffer),
+        ckpt_dir=cfg.train.checkpoint_dir,
+    )
     if loaded:
         print(f"warmed replay buffer with {loaded} samples from shard files")
+    elif start_iter > 0:
+        print(
+            "warning: resume warm-up loaded 0 samples "
+            f"(checkpoint_dir={cfg.train.checkpoint_dir})",
+            flush=True,
+        )
 
     tablebase = None
     if cfg.train.syzygy_path:

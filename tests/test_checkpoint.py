@@ -16,6 +16,7 @@ from engine.selfplay import Sample
 from engine.train import (
     _load_sample_shard,
     _require_value_target_compat,
+    _require_warm_buffer_fill,
     _save_sample_shard,
     _warm_replay_buffer,
     save_checkpoint,
@@ -131,6 +132,98 @@ def test_warm_replay_buffer_uses_newest_shards_only(tmp_path) -> None:
 
     assert loaded == 2
     assert [s.source_iter for s in buffer] == [3, 4]
+
+
+def test_warm_replay_buffer_fills_beyond_old_twenty_shard_cap(tmp_path) -> None:
+    """Default warm must keep loading until the window is full (no silent 20-shard stop)."""
+    ckpt_dir = str(tmp_path)
+    for iteration in range(30):
+        samples = []
+        for _ in range(10):
+            sample = _fake_sample()
+            sample.source_iter = iteration
+            samples.append(sample)
+        _save_sample_shard(ckpt_dir, iteration, samples, value_target="root_q")
+
+    buffer: deque[Sample] = deque(maxlen=250)
+    loaded = _warm_replay_buffer(
+        buffer,
+        ckpt_dir,
+        replay_window=250,
+        expected_value_target="root_q",
+        max_shards=0,
+    )
+
+    assert loaded == 250
+    assert len(buffer) == 250
+    # Newest shards dominate; oldest of the kept window should be well past iter 0.
+    assert min(s.source_iter for s in buffer) >= 5
+
+
+def test_warm_replay_skips_disconnect_and_continues(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ckpt_dir = str(tmp_path)
+    for iteration in range(3):
+        sample = _fake_sample()
+        sample.source_iter = iteration
+        _save_sample_shard(ckpt_dir, iteration, [sample], value_target="root_q")
+
+    real_load = __import__("engine.train", fromlist=["_load_sample_shard"])._load_sample_shard
+    calls = {"n": 0}
+
+    def flaky_load(path: str, *, expected_value_target: str | None = None):
+        calls["n"] += 1
+        # Fail the newest shard (iter 2) with a Drive disconnect once per retry budget.
+        if path.endswith("samples_iter_0002.npz"):
+            raise OSError(107, "Transport endpoint is not connected")
+        return real_load(path, expected_value_target=expected_value_target)
+
+    monkeypatch.setattr("engine.train._load_sample_shard", flaky_load)
+
+    buffer: deque[Sample] = deque(maxlen=10)
+    loaded = _warm_replay_buffer(
+        buffer,
+        ckpt_dir,
+        replay_window=10,
+        expected_value_target="root_q",
+        max_shards=0,
+    )
+
+    assert loaded == 2
+    assert [s.source_iter for s in buffer] == [0, 1]
+    assert calls["n"] >= 3  # retries on the bad shard + older shards
+
+
+def test_require_warm_buffer_fill_blocks_cold_resume(tmp_path) -> None:
+    with pytest.raises(RuntimeError, match="cold replay buffer"):
+        _require_warm_buffer_fill(
+            50_000,
+            replay_buffer_size=200_000,
+            replay_window=200_000,
+            start_iter=621,
+            allow_cold=False,
+            ckpt_dir=str(tmp_path),
+        )
+
+
+def test_require_warm_buffer_fill_allows_fresh_start_and_opt_out(tmp_path) -> None:
+    _require_warm_buffer_fill(
+        0,
+        replay_buffer_size=200_000,
+        replay_window=200_000,
+        start_iter=0,
+        allow_cold=False,
+        ckpt_dir=str(tmp_path),
+    )
+    _require_warm_buffer_fill(
+        1_000,
+        replay_buffer_size=200_000,
+        replay_window=200_000,
+        start_iter=621,
+        allow_cold=True,
+        ckpt_dir=str(tmp_path),
+    )
 
 
 def test_sample_shard_atomic_round_trip(tmp_path) -> None:
