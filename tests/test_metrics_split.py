@@ -25,6 +25,7 @@ EXPECTED_TRAINING_COLUMNS = (
     "dirichlet_alpha", "dirichlet_epsilon", "move_temperature",
     "move_temperature_plies", "random_opening_plies",
     "random_opening_probability",
+    "wdl_coef", "wdl_loss", "wdl_accuracy", "wdl_labeled_fraction",
 )
 
 EXPECTED_PERFORMANCE_COLUMNS = (
@@ -116,6 +117,10 @@ def _log_fresh_metrics(checkpoint_dir: str) -> None:
         move_temperature_plies=12,
         random_opening_plies=4,
         random_opening_probability=0.3,
+        wdl_coef=0.25,
+        wdl_loss=0.9,
+        wdl_accuracy=0.55,
+        wdl_labeled_fraction=0.8,
         selfplay_concurrency=16,
         selfplay_workers=3,
         central_inference=True,
@@ -228,6 +233,10 @@ def test_fresh_append_logs_recipe_runtime_and_rates(tmp_path) -> None:
     assert train_row["move_temperature_plies"] == "12"
     assert train_row["random_opening_plies"] == "4"
     assert train_row["random_opening_probability"] == "0.300000"
+    assert train_row["wdl_coef"] == "0.250000"
+    assert train_row["wdl_loss"] == "0.900000"
+    assert train_row["wdl_accuracy"] == "0.550000"
+    assert train_row["wdl_labeled_fraction"] == "0.800000"
     assert train_row["terminations"] == "checkmate:10;draw:2"
 
     perf_row = performance[0]
@@ -250,7 +259,14 @@ def test_append_upgrades_prior_training_header_with_opening_probability(tmp_path
     prior_columns = [
         column
         for column in EXPECTED_TRAINING_COLUMNS
-        if column != "random_opening_probability"
+        if column
+        not in {
+            "random_opening_probability",
+            "wdl_coef",
+            "wdl_loss",
+            "wdl_accuracy",
+            "wdl_labeled_fraction",
+        }
     ]
     prior_row = {column: "" for column in prior_columns}
     prior_row.update({"iter": "8", "random_opening_plies": "1"})
@@ -272,3 +288,36 @@ def test_append_upgrades_prior_training_header_with_opening_probability(tmp_path
     assert [row["iter"] for row in rows] == ["8", "9"]
     assert rows[0]["random_opening_probability"] == "1.000000"
     assert rows[1]["random_opening_probability"] == "0.300000"
+    assert rows[0]["wdl_coef"] == ""
+    assert rows[1]["wdl_coef"] == "0.250000"
+
+
+def test_append_upgrades_prior_training_header_with_wdl_columns(tmp_path) -> None:
+    path = tmp_path / "metrics_training.csv"
+    prior_columns = [
+        column
+        for column in EXPECTED_TRAINING_COLUMNS
+        if column
+        not in {"wdl_coef", "wdl_loss", "wdl_accuracy", "wdl_labeled_fraction"}
+    ]
+    prior_row = {column: "" for column in prior_columns}
+    prior_row.update({"iter": "8", "random_opening_probability": "0.500000"})
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=prior_columns, lineterminator="\n")
+        writer.writeheader()
+        writer.writerow(prior_row)
+    with (tmp_path / "metrics_performance.csv").open(
+        "w", encoding="utf-8", newline=""
+    ) as handle:
+        csv.DictWriter(
+            handle, fieldnames=EXPECTED_PERFORMANCE_COLUMNS, lineterminator="\n"
+        ).writeheader()
+
+    _log_fresh_metrics(str(tmp_path))
+
+    header, rows = _read_csv(path)
+    assert header == list(EXPECTED_TRAINING_COLUMNS)
+    assert [row["iter"] for row in rows] == ["8", "9"]
+    assert rows[0]["random_opening_probability"] == "0.500000"
+    assert rows[0]["wdl_loss"] == ""
+    assert rows[1]["wdl_accuracy"] == "0.550000"

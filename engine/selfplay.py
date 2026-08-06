@@ -38,6 +38,12 @@ from .profile import ProfileCounters
 _EXPLORATION_MOVES = 20  # sample from the policy for this many plies, then argmax
 GATE_OPENING_PLIES = 8
 
+# Optional aux-head WDL labels (side-to-move POV). Independent of value_target / draw_penalty.
+WDL_WIN = 0
+WDL_DRAW = 1
+WDL_LOSS = 2
+WDL_UNLABELED = -1
+
 
 def _selfplay_start_moves(
     cfg: Config,
@@ -157,6 +163,8 @@ class Sample:
     root_q: float = 0.0     # STM-POV searched_root_q (value_target root_q / q_z)
     # KL(π_target ‖ π_prior) at self-play write time; used only for surprise weighting.
     policy_surprise: float = 0.0
+    # Terminal WDL class for optional aux head: 0=W, 1=D, 2=L, -1=unlabeled (STM POV).
+    wdl: int = WDL_UNLABELED
 
 
 def _clone_sample(sample: Sample) -> Sample:
@@ -168,6 +176,7 @@ def _clone_sample(sample: Sample) -> Sample:
         source_iter=int(sample.source_iter),
         root_q=float(sample.root_q),
         policy_surprise=float(sample.policy_surprise),
+        wdl=int(sample.wdl),
     )
 
 
@@ -232,6 +241,37 @@ _DRAW_TERMINATION_NAMES = {
     chess.Termination.SEVENTYFIVE_MOVES: "seventyfive_moves",
 }
 _DRAW_TERMINATION_SET = set(_DRAW_TERMINATION_NAMES.values())
+_DECISIVE_TERMINATION_SET = frozenset({"checkmate", "resign", "tablebase_win"})
+
+
+def wdl_label_from_result(
+    player: chess.Color,
+    termination: str,
+    winner: chess.Color | None,
+) -> int:
+    """STM-POV WDL class from game termination + winner. Ignores draw_penalty."""
+    if termination in _DECISIVE_TERMINATION_SET and winner is not None:
+        return WDL_WIN if player == winner else WDL_LOSS
+    if termination in _DRAW_TERMINATION_SET or termination == "tablebase_draw":
+        return WDL_DRAW
+    # max_moves, no_legal_moves, unknown / nonterminal → unsupervised
+    return WDL_UNLABELED
+
+
+def assign_sample_wdl(
+    samples: list[Sample],
+    *,
+    termination: str,
+    winner: chess.Color | None,
+    enabled: bool,
+) -> None:
+    """Fill Sample.wdl for Python completion and native GameActorBatch wrappers."""
+    if not enabled:
+        for sample in samples:
+            sample.wdl = WDL_UNLABELED
+        return
+    for sample in samples:
+        sample.wdl = wdl_label_from_result(sample.player, termination, winner)
 
 
 @dataclass
@@ -391,6 +431,12 @@ def play_game_gen(cfg: Config, simulations: int, *, add_noise: bool = True,
             winner = None
     else:
         winner = None
+    assign_sample_wdl(
+        samples,
+        termination=termination,
+        winner=winner,
+        enabled=bool(cfg.net.wdl_head),
+    )
     return GameResult(
         samples=samples,
         termination=termination,
@@ -464,6 +510,12 @@ def _finalize_native_game(state: _NativeGameState, cfg: Config) -> GameResult:
             winner = None
     else:
         winner = None
+    assign_sample_wdl(
+        state.samples,
+        termination=termination,
+        winner=winner,
+        enabled=bool(cfg.net.wdl_head),
+    )
     return GameResult(
         samples=state.samples, termination=termination, winner=winner, moves=list(state.moves)
     )
@@ -650,10 +702,18 @@ def play_games_batched_native_actors(
                 for row in range(start, end)
             ]
             winner_value = int(meta["winner"])
+            termination = str(meta["termination"])
+            winner = None if winner_value < 0 else _color_from_native(winner_value)
+            assign_sample_wdl(
+                samples,
+                termination=termination,
+                winner=winner,
+                enabled=bool(cfg.net.wdl_head),
+            )
             game = GameResult(
                 samples=samples,
-                termination=str(meta["termination"]),
-                winner=None if winner_value < 0 else _color_from_native(winner_value),
+                termination=termination,
+                winner=winner,
                 moves=list(meta["moves"]),
                 opening_prefix_plies=(
                     len(start_moves[int(meta["actor_id"])]) if start_moves is not None else 0
@@ -1021,6 +1081,7 @@ def _config_to_dict(cfg: Config) -> dict:
             "blocks": cfg.net.blocks,
             "filters": cfg.net.filters,
             "value_bins": cfg.net.value_bins,
+            "wdl_head": bool(cfg.net.wdl_head),
         },
         "mcts": {
             "simulations": cfg.mcts.simulations,
@@ -1066,6 +1127,7 @@ def _config_to_dict(cfg: Config) -> dict:
             "checkpoint_dir": cfg.train.checkpoint_dir,
             "grad_clip_norm": cfg.train.grad_clip_norm,
             "value_coef": cfg.train.value_coef,
+            "wdl_coef": cfg.train.wdl_coef,
             "move_temperature": cfg.train.move_temperature,
             "move_temperature_plies": cfg.train.move_temperature_plies,
             "random_opening_plies": cfg.train.random_opening_plies,
@@ -1269,6 +1331,7 @@ def _net_cfg_dict(net_cfg: NetConfig) -> dict:
         "blocks": net_cfg.blocks,
         "filters": net_cfg.filters,
         "value_bins": net_cfg.value_bins,
+        "wdl_head": bool(net_cfg.wdl_head),
     }
 
 
@@ -1655,10 +1718,18 @@ def play_match_batched_native_actors(
                 for sample_row in range(start, end)
             ]
             winner_value = int(meta["winner"])
+            termination = str(meta["termination"])
+            winner = None if winner_value < 0 else _color_from_native(winner_value)
+            assign_sample_wdl(
+                samples,
+                termination=termination,
+                winner=winner,
+                enabled=bool(cfg.net.wdl_head),
+            )
             game = GameResult(
                 samples=samples,
-                termination=str(meta["termination"]),
-                winner=None if winner_value < 0 else _color_from_native(winner_value),
+                termination=termination,
+                winner=winner,
                 moves=list(meta["moves"]),
             )
             _record_match_game(stats, game, a_is_white[actor_id], actor_id)
@@ -1844,11 +1915,13 @@ def play_match_parallel(
         "blocks": net_cfg_a.blocks,
         "filters": net_cfg_a.filters,
         "value_bins": net_cfg_a.value_bins,
+        "wdl_head": bool(net_cfg_a.wdl_head),
     }
     net_cfg_b_dict = {
         "blocks": net_cfg_b.blocks,
         "filters": net_cfg_b.filters,
         "value_bins": net_cfg_b.value_bins,
+        "wdl_head": bool(net_cfg_b.wdl_head),
     }
 
     payloads = []

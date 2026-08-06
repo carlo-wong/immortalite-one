@@ -36,6 +36,7 @@ class ChessNet(nn.Module):
         cfg = cfg or NetConfig()
         f = cfg.filters
         self.value_bins = cfg.value_bins
+        self.wdl_head = bool(cfg.wdl_head)
 
         self.stem = nn.Sequential(
             nn.Conv2d(NUM_INPUT_PLANES, f, 3, padding=1, bias=False),
@@ -58,7 +59,28 @@ class ChessNet(nn.Module):
         self.value_fc2 = nn.Linear(128, self.value_bins)
         self.register_buffer("value_support", torch.linspace(-1.0, 1.0, self.value_bins))
 
+        # Optional terminal WDL head [W, D, L] from the value representation.
+        # Absent when disabled so state_dict keys match baseline checkpoints.
+        if self.wdl_head:
+            self.wdl_fc = nn.Linear(128, 3)
+
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Inference path: policy and value only (never computes WDL)."""
+        p, value_logits, _ = self._forward_core(x, compute_wdl=False)
+        return p, value_logits
+
+    def forward_train(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Training path: policy, value, and optional WDL logits when enabled."""
+        p, value_logits, wdl_logits = self._forward_core(x, compute_wdl=self.wdl_head)
+        if wdl_logits is None:
+            return p, value_logits
+        return p, value_logits, wdl_logits
+
+    def _forward_core(
+        self, x: torch.Tensor, *, compute_wdl: bool
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         x = self.stem(x)
         x = self.tower(x)
 
@@ -68,7 +90,11 @@ class ChessNet(nn.Module):
         v = self.value_conv(x).flatten(1)
         v = F.relu(self.value_fc1(v))
         value_logits = self.value_fc2(v)
-        return p, value_logits
+
+        wdl_logits: torch.Tensor | None = None
+        if compute_wdl:
+            wdl_logits = self.wdl_fc(v)
+        return p, value_logits, wdl_logits
 
     def value_from_logits(self, value_logits: torch.Tensor) -> torch.Tensor:
         probs = F.softmax(value_logits.float(), dim=-1)

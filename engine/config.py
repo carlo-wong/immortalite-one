@@ -11,6 +11,8 @@ class NetConfig:
     blocks: int = 6
     filters: int = 64
     value_bins: int = 51
+    # Optional terminal WDL head [W, D, L]; off preserves baseline checkpoints.
+    wdl_head: bool = False
 
 
 @dataclass
@@ -83,6 +85,8 @@ class TrainConfig:
     grad_clip_norm: float = 10.0
     # loss = policy_loss + value_coef * value_loss (1.0 = classic equal weight).
     value_coef: float = 1.0
+    # Optional WDL CE weight when NetConfig.wdl_head is enabled (0 = unused).
+    wdl_coef: float = 0.0
     # Early-ply move-selection temperature (sampling only; stored targets stay untempered).
     move_temperature: float = 1.0       # 1.0 = no tempering
     move_temperature_plies: int = 0     # 0 = disabled; apply T while move_count < this

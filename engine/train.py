@@ -54,6 +54,7 @@ from .selfplay import (
     GameResult,
     Sample,
     SelfplayWorkerPool,
+    WDL_UNLABELED,
     _native_match_actors_ready,
     _opening_row,
     expand_samples_by_policy_surprise,
@@ -65,6 +66,7 @@ from .selfplay import (
 
 _SAMPLE_SHARD_PREFIX = "samples_iter_"
 _SAMPLE_SHARD_SUFFIX = ".npz"
+_WDL_SCHEMA = "stm_wdl_v1"
 
 TRAINING_METRICS_COLUMNS = (
     "iter",
@@ -102,6 +104,18 @@ TRAINING_METRICS_COLUMNS = (
     "move_temperature_plies",
     "random_opening_plies",
     "random_opening_probability",
+    "wdl_coef",
+    "wdl_loss",
+    "wdl_accuracy",
+    "wdl_labeled_fraction",
+)
+
+# Columns appended after the historical tip header; upgrades fill defaults.
+_TRAINING_METRICS_WDL_COLUMNS = (
+    "wdl_coef",
+    "wdl_loss",
+    "wdl_accuracy",
+    "wdl_labeled_fraction",
 )
 
 PERFORMANCE_METRICS_COLUMNS = (
@@ -141,12 +155,45 @@ def _tqdm_sync_progress(bar: tqdm, completed: int) -> None:
         bar.update(delta)
 
 
+def _unwrap_module(module: torch.nn.Module) -> torch.nn.Module:
+    return getattr(module, "_orig_mod", module)
+
+
+def _module_has_wdl_head(net: torch.nn.Module) -> bool:
+    return bool(getattr(_unwrap_module(net), "wdl_head", False))
+
+
 def _net_cfg_from_module(net: ChessNet) -> NetConfig:
+    model = _unwrap_module(net)
     return NetConfig(
-        blocks=len(net.tower),
-        filters=int(net.stem[0].out_channels),
-        value_bins=int(net.value_bins),
+        blocks=len(model.tower),
+        filters=int(model.stem[0].out_channels),
+        value_bins=int(model.value_bins),
+        wdl_head=_module_has_wdl_head(model),
     )
+
+
+def _checkpoint_wdl_head(state: object) -> bool:
+    """Return stamped ``wdl_head``; missing ``net`` stamp means legacy (False)."""
+    if not isinstance(state, dict) or "net" not in state:
+        return False
+    return bool(NetConfig(**state["net"]).wdl_head)
+
+
+def _require_wdl_upgrade_reset(
+    *,
+    cli_wdl_head: bool,
+    checkpoint_wdl_head: bool,
+    reset_optimizer: bool,
+    resuming: bool,
+) -> None:
+    """Refuse legacy→WDL architecture upgrades without a fresh optimizer."""
+    if resuming and cli_wdl_head and not checkpoint_wdl_head and not reset_optimizer:
+        raise ValueError(
+            "Enabling --wdl-head on a legacy (non-WDL) checkpoint changes the "
+            "network architecture; pass --reset-optimizer to continue with a "
+            "fresh Adam state (or resume a WDL-stamped checkpoint)."
+        )
 
 
 def _lr_for_iteration(cfg: Config, it: int) -> float:
@@ -221,24 +268,55 @@ def _load_matching_state_dict(module: torch.nn.Module, state_dict: dict,
 def train_step(net: ChessNet, optimizer, batch: list[Sample], device: str,
                scaler: torch.cuda.amp.GradScaler | None = None,
                grad_clip: float = 10.0,
-               value_coef: float = 1.0) -> dict[str, float]:
+               value_coef: float = 1.0,
+               wdl_coef: float = 0.0) -> dict[str, float]:
     use_cuda = device.startswith("cuda")
+    wdl_coef_f = float(wdl_coef)
+    has_wdl_head = _module_has_wdl_head(net)
+    if wdl_coef_f > 0.0 and not has_wdl_head:
+        raise ValueError(
+            "wdl_coef > 0 requires a network with wdl_head enabled "
+            "(resume a WDL checkpoint or pass --wdl-head with --reset-optimizer)"
+        )
+
+    model = _unwrap_module(net)
     with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=use_cuda):
         planes = torch.from_numpy(np.stack([s.planes for s in batch])).to(device).float()
         target_pi = torch.from_numpy(np.stack([s.policy for s in batch])).to(device).float()
         target_v = torch.tensor([s.value for s in batch], dtype=torch.float32, device=device)
 
-        logits, value_logits = net(planes)
-        value = net.value_from_logits(value_logits)
+        # Aux WDL path only when the head is present and the loss weight is
+        # active. wdl_coef==0 keeps the compiled net(planes) path and leaves
+        # the auxiliary head idle (no aux logits, zero WDL metrics).
+        use_wdl_aux = has_wdl_head and wdl_coef_f > 0.0
+        if use_wdl_aux:
+            logits, value_logits, wdl_logits = net.forward_train(planes)
+        else:
+            logits, value_logits = net(planes)
+            wdl_logits = None
+
+        value = model.value_from_logits(value_logits)
         log_probs = F.log_softmax(logits, dim=1)
         policy_loss = -(target_pi * log_probs).sum(dim=1).mean()
         value_log_probs = F.log_softmax(value_logits, dim=1)
-        bins = max(2, int(net.value_support.numel()))
+        bins = max(2, int(model.value_support.numel()))
         bin_width = 2.0 / (bins - 1)
         sigma = 0.75 * bin_width
-        target_v_dist = _gaussian_value_targets(target_v, net.value_support, sigma)
+        target_v_dist = _gaussian_value_targets(target_v, model.value_support, sigma)
         value_loss = -(target_v_dist * value_log_probs).sum(dim=1).mean()
-        loss = policy_loss + float(value_coef) * value_loss
+
+        wdl_loss_t = torch.zeros((), device=device, dtype=policy_loss.dtype)
+        target_wdl: torch.Tensor | None = None
+        valid_wdl: torch.Tensor | None = None
+        if wdl_logits is not None:
+            target_wdl = torch.tensor(
+                [int(s.wdl) for s in batch], dtype=torch.long, device=device
+            )
+            valid_wdl = target_wdl >= 0
+            if bool(valid_wdl.any()):
+                wdl_loss_t = F.cross_entropy(wdl_logits[valid_wdl], target_wdl[valid_wdl])
+
+        loss = policy_loss + float(value_coef) * value_loss + wdl_coef_f * wdl_loss_t
 
     optimizer.zero_grad()
     if scaler is not None:
@@ -260,6 +338,18 @@ def train_step(net: ChessNet, optimizer, batch: list[Sample], device: str,
         value_sign_acc = (torch.sign(value_f) == torch.sign(target_v)).float().mean()
         policy_top1_agree = (torch.argmax(logits, dim=1) == torch.argmax(target_pi, dim=1)).float().mean()
 
+        wdl_loss_val = 0.0
+        wdl_accuracy = 0.0
+        wdl_labeled_fraction = 0.0
+        if wdl_logits is not None and target_wdl is not None and valid_wdl is not None:
+            wdl_labeled_fraction = float(valid_wdl.float().mean().item())
+            if bool(valid_wdl.any()):
+                wdl_loss_val = float(wdl_loss_t.float().item())
+                pred = torch.argmax(wdl_logits, dim=1)
+                wdl_accuracy = float(
+                    (pred[valid_wdl] == target_wdl[valid_wdl]).float().mean().item()
+                )
+
     return {
         "policy_loss": float(policy_loss.item()),
         "value_loss": float(value_loss.item()),
@@ -267,6 +357,9 @@ def train_step(net: ChessNet, optimizer, batch: list[Sample], device: str,
         "value_sign_acc": float(value_sign_acc.item()),
         "policy_top1_agree": float(policy_top1_agree.item()),
         "grad_norm": float(grad_norm),
+        "wdl_loss": wdl_loss_val,
+        "wdl_accuracy": wdl_accuracy,
+        "wdl_labeled_fraction": wdl_labeled_fraction,
     }
 
 
@@ -283,6 +376,7 @@ def save_checkpoint(net: torch.nn.Module, cfg: Config, path: str, iteration: int
         "iteration": iteration,
         "encoding_version": ENCODING_VERSION,
         "value_target": cfg.train.value_target,
+        "wdl_coef": float(cfg.train.wdl_coef),
     }
     if optimizer is not None:
         payload["optimizer"] = optimizer.state_dict()
@@ -444,6 +538,41 @@ def migrate_legacy_metrics(ckpt_dir: str, *, keep_source: bool = False) -> str |
     return retained_source
 
 
+def _upgrade_training_metrics_rows(
+    existing_header: list[str],
+    existing_rows: list[dict[str, str]],
+    columns: tuple[str, ...],
+) -> list[dict[str, str]] | None:
+    """Return upgraded rows when ``existing_header`` is a known prior tip header."""
+    target = list(columns)
+    if existing_header == target:
+        return None
+
+    without_wdl = [c for c in columns if c not in _TRAINING_METRICS_WDL_COLUMNS]
+    without_rop = [c for c in without_wdl if c != "random_opening_probability"]
+
+    if existing_header == without_rop:
+        for existing in existing_rows:
+            try:
+                has_prefix = float(existing.get("random_opening_plies", "") or 0) > 0
+            except ValueError:
+                has_prefix = False
+            existing["random_opening_probability"] = (
+                "1.000000" if has_prefix else "0.000000"
+            )
+            for column in _TRAINING_METRICS_WDL_COLUMNS:
+                existing.setdefault(column, "")
+        return existing_rows
+
+    if existing_header == without_wdl:
+        for existing in existing_rows:
+            for column in _TRAINING_METRICS_WDL_COLUMNS:
+                existing.setdefault(column, "")
+        return existing_rows
+
+    return None
+
+
 def _append_metrics_csv(
     path: str,
     columns: tuple[str, ...],
@@ -453,26 +582,19 @@ def _append_metrics_csv(
     if not new:
         with open(path, encoding="utf-8", newline="") as f:
             existing_header = next(csv.reader(f), [])
-        prior_training_columns = [
-            column for column in columns if column != "random_opening_probability"
-        ]
         if (
             os.path.basename(path) == "metrics_training.csv"
-            and existing_header == prior_training_columns
+            and existing_header != list(columns)
         ):
             with open(path, encoding="utf-8", newline="") as f:
                 existing_rows = list(csv.DictReader(f))
-            for existing in existing_rows:
-                try:
-                    has_prefix = float(existing.get("random_opening_plies", "") or 0) > 0
-                except ValueError:
-                    has_prefix = False
-                existing["random_opening_probability"] = (
-                    "1.000000" if has_prefix else "0.000000"
-                )
-            staged = _stage_csv(os.path.dirname(path) or ".", columns, existing_rows)
-            os.replace(staged, path)
-            existing_header = list(columns)
+            upgraded = _upgrade_training_metrics_rows(
+                existing_header, existing_rows, columns
+            )
+            if upgraded is not None:
+                staged = _stage_csv(os.path.dirname(path) or ".", columns, upgraded)
+                os.replace(staged, path)
+                existing_header = list(columns)
         if existing_header != list(columns):
             raise RuntimeError(f"unexpected metrics header in {path}")
     with open(path, "a", encoding="utf-8", newline="") as f:
@@ -516,7 +638,11 @@ def _log_metrics(ckpt_dir: str, it: int, sims: int, samples: int, dt: float, *,
                  winrate_quick: float = float("nan"),
                  gpu_util_pct: float = float("nan"),
                  buffer_min_iter: int = 0,
-                 buffer_max_iter: int = 0) -> None:
+                 buffer_max_iter: int = 0,
+                 wdl_coef: float = 0.0,
+                 wdl_loss: float = float("nan"),
+                 wdl_accuracy: float = float("nan"),
+                 wdl_labeled_fraction: float = float("nan")) -> None:
     ckpt_dir = ckpt_dir or "."
     os.makedirs(ckpt_dir, exist_ok=True)
     migrate_legacy_metrics(ckpt_dir)
@@ -557,6 +683,10 @@ def _log_metrics(ckpt_dir: str, it: int, sims: int, samples: int, dt: float, *,
         "move_temperature_plies": move_temperature_plies,
         "random_opening_plies": random_opening_plies,
         "random_opening_probability": f"{random_opening_probability:.6f}",
+        "wdl_coef": f"{wdl_coef:.6f}",
+        "wdl_loss": f"{wdl_loss:.6f}",
+        "wdl_accuracy": f"{wdl_accuracy:.6f}",
+        "wdl_labeled_fraction": f"{wdl_labeled_fraction:.6f}",
     }
     overhead = (
         f"{dt - selfplay_seconds - train_seconds:.1f}"
@@ -1550,19 +1680,24 @@ def _save_sample_shard(
     players = np.array([bool(s.player) for s in samples], dtype=np.bool_)
     values = np.array([s.value for s in samples], dtype=np.float32)
     source_iters = np.array([s.source_iter for s in samples], dtype=np.int32)
+    wdl = np.array([int(s.wdl) for s in samples], dtype=np.int8)
+    payload: dict[str, np.ndarray] = {
+        "planes": planes,
+        "policies": policies,
+        "players": players,
+        "values": values,
+        "source_iters": source_iters,
+        "encoding_version": np.array([ENCODING_VERSION], dtype=np.int16),
+        "value_target": np.array([value_target], dtype=np.str_),
+    }
+    # Persist WDL labels only when at least one labeled row exists (legacy shards omit).
+    if bool(np.any(wdl >= 0)):
+        payload["wdl"] = wdl
+        payload["wdl_schema"] = np.array([_WDL_SCHEMA], dtype=np.str_)
     fd, tmp_path = tempfile.mkstemp(dir=ckpt_dir, suffix=".npz")
     os.close(fd)
     try:
-        np.savez_compressed(
-            tmp_path,
-            planes=planes,
-            policies=policies,
-            players=players,
-            values=values,
-            source_iters=source_iters,
-            encoding_version=np.array([ENCODING_VERSION], dtype=np.int16),
-            value_target=np.array([value_target], dtype=np.str_),
-        )
+        np.savez_compressed(tmp_path, **payload)
         os.replace(tmp_path, path)
     except BaseException:
         if os.path.exists(tmp_path):
@@ -1583,6 +1718,15 @@ def _shard_value_target(data: np.lib.npyio.NpzFile) -> str | None:
     if "value_target" not in data:
         return None
     raw = np.asarray(data["value_target"]).reshape(-1)
+    if raw.size == 0:
+        return None
+    return str(raw[0])
+
+
+def _shard_wdl_schema(data: np.lib.npyio.NpzFile) -> str | None:
+    if "wdl_schema" not in data:
+        return None
+    raw = np.asarray(data["wdl_schema"]).reshape(-1)
     if raw.size == 0:
         return None
     return str(raw[0])
@@ -1647,9 +1791,20 @@ def _load_sample_shard(
             players = data["players"] if "players" in data else data["player"]
             values = data["values"] if "values" in data else data["value"]
             source_iters = data["source_iters"] if "source_iters" in data else None
+            wdls = data["wdl"] if "wdl" in data else None
+            if wdls is not None:
+                shard_schema = _shard_wdl_schema(data)
+                if shard_schema != _WDL_SCHEMA:
+                    schema_label = shard_schema if shard_schema is not None else "missing"
+                    print(
+                        f"warning: skipping shard {os.path.basename(path)} "
+                        f"(wdl_schema={schema_label} != {_WDL_SCHEMA})"
+                    )
+                    return []
             samples: list[Sample] = []
             for i in range(values.shape[0]):
                 source_iter = int(source_iters[i]) if source_iters is not None else 0
+                wdl = int(wdls[i]) if wdls is not None else WDL_UNLABELED
                 samples.append(
                     Sample(
                         planes=planes[i],
@@ -1657,6 +1812,7 @@ def _load_sample_shard(
                         player=bool(players[i]),
                         value=float(values[i]),
                         source_iter=source_iter,
+                        wdl=wdl,
                     )
                 )
             return samples
@@ -1906,6 +2062,15 @@ def main() -> None:
         help="multiply value_loss in total loss (default 1.0; e.g. 1.5 up-weights value)",
     )
     parser.add_argument(
+        "--wdl-head",
+        action="store_true",
+        help="enable optional terminal WDL aux head (legacy upgrade requires --reset-optimizer)",
+    )
+    parser.add_argument(
+        "--wdl-coef", type=float, default=None,
+        help="WDL cross-entropy weight in total loss (default 0; requires wdl_head)",
+    )
+    parser.add_argument(
         "--policy-surprise-data-weight", type=float, default=None,
         help="KataGo-style self-play write weight α in [0,1] (0=off, 0.5=half∝KL)",
     )
@@ -2085,6 +2250,12 @@ def main() -> None:
         cfg.train.value_coef = float(args.value_coef)
     if cfg.train.value_coef < 0.0:
         raise ValueError("--value-coef must be >= 0")
+    if args.wdl_head:
+        cfg.net.wdl_head = True
+    if args.wdl_coef is not None:
+        cfg.train.wdl_coef = float(args.wdl_coef)
+    if cfg.train.wdl_coef < 0.0:
+        raise ValueError("--wdl-coef must be >= 0")
     if args.policy_surprise_data_weight is not None:
         cfg.train.policy_surprise_data_weight = float(args.policy_surprise_data_weight)
     if not 0.0 <= cfg.train.policy_surprise_data_weight <= 1.0:
@@ -2115,47 +2286,6 @@ def main() -> None:
         gate_openings = load_opening_book(gate_openings_spec)
     # Keep self-play search contempt aligned with the draw target shaping.
     cfg.mcts.draw_contempt = cfg.train.draw_penalty
-    print(
-        "config: "
-        f"games={cfg.train.games_per_iteration} "
-        f"steps={cfg.train.train_steps_per_iteration} "
-        f"sims={cfg.mcts.simulations} "
-        f"c_puct={cfg.mcts.c_puct:.3f} "
-        f"dirichlet_alpha={cfg.mcts.dirichlet_alpha:.3f} "
-        f"dirichlet_epsilon={cfg.mcts.dirichlet_epsilon:.3f} "
-        f"concurrency={cfg.train.selfplay_concurrency} "
-        f"selfplay_workers={args.selfplay_workers} "
-        f"central_inference={'on' if central_inference else 'off'} "
-        f"max_moves={cfg.train.max_game_moves} "
-        f"lr={cfg.train.learning_rate:.6f} "
-        f"lr_min={cfg.train.lr_min:.6f} "
-        f"lr_warmup_iters={cfg.train.lr_warmup_iters} "
-        f"lr_total_iters={cfg.train.lr_total_iters} "
-        f"tb_max_pieces={cfg.train.tb_max_pieces} "
-        f"syzygy_path={cfg.train.syzygy_path or 'off'} "
-        f"draw_penalty={cfg.train.draw_penalty:.3f} "
-        f"value_target={cfg.train.value_target} "
-        f"value_q_ratio={cfg.train.value_q_ratio:.3f} "
-        f"value_coef={cfg.train.value_coef:.3f} "
-        f"policy_surprise_data_weight={cfg.train.policy_surprise_data_weight:.3f} "
-        f"resign_threshold={cfg.train.resign_threshold:.3f} "
-        f"resign_plies={cfg.train.resign_plies} "
-        f"resign_min_moves={cfg.train.resign_min_moves} "
-        f"move_temperature={cfg.train.move_temperature:.3f} "
-        f"move_temperature_plies={cfg.train.move_temperature_plies} "
-        f"random_opening_plies={cfg.train.random_opening_plies} "
-        f"random_opening_probability={cfg.train.random_opening_probability:.3f} "
-        f"gate_games={args.gate_games} "
-        f"gate_sims={args.gate_sims if args.gate_sims is not None else 'match-selfplay'} "
-        f"gate_exploration_moves={args.gate_exploration_moves} "
-        f"gate_openings={gate_openings_spec}"
-        f"{f'({len(gate_openings)} lines)' if gate_openings else ''} "
-        f"gate_anchor_iter={args.gate_anchor_iter} "
-        f"quick_eval_games={args.quick_eval_games} "
-        f"quick_eval_lag={args.quick_eval_lag}"
-    )
-    step_metrics_path = os.path.join(cfg.train.checkpoint_dir, "metrics_steps.csv")
-    print(f"step metrics: {step_metrics_path}")
 
     # When resuming, the checkpoint's own architecture wins over the CLI preset
     # (you cannot change net size mid-training). To train a fresh net of a
@@ -2184,15 +2314,82 @@ def main() -> None:
             require_explicit_for_legacy=True,
             explicit_cli=args.value_target is not None,
         )
+        # Missing net stamp ⇒ legacy (False) for the WDL upgrade guard.
+        checkpoint_wdl_head = _checkpoint_wdl_head(state)
+        _require_wdl_upgrade_reset(
+            cli_wdl_head=bool(args.wdl_head),
+            checkpoint_wdl_head=checkpoint_wdl_head,
+            reset_optimizer=bool(args.reset_optimizer),
+            resuming=True,
+        )
         if isinstance(state, dict) and "net" in state:
-            cfg.net = NetConfig(**state["net"])
+            ckpt_net = NetConfig(**state["net"])
+            if args.wdl_head and not ckpt_net.wdl_head:
+                ckpt_net.wdl_head = True
+            # Stamped WDL architecture wins over a missing CLI flag (no silent downgrade).
+            cfg.net = ckpt_net
+        if (
+            isinstance(state, dict)
+            and "wdl_coef" in state
+            and args.wdl_coef is None
+        ):
+            cfg.train.wdl_coef = float(state["wdl_coef"])
+    if cfg.train.wdl_coef > 0.0 and not cfg.net.wdl_head:
+        raise ValueError(
+            "--wdl-coef > 0 requires --wdl-head or a WDL-stamped checkpoint"
+        )
+    # Banner after resume restore so wdl_head/wdl_coef match actual training.
+    print(
+        "config: "
+        f"games={cfg.train.games_per_iteration} "
+        f"steps={cfg.train.train_steps_per_iteration} "
+        f"sims={cfg.mcts.simulations} "
+        f"c_puct={cfg.mcts.c_puct:.3f} "
+        f"dirichlet_alpha={cfg.mcts.dirichlet_alpha:.3f} "
+        f"dirichlet_epsilon={cfg.mcts.dirichlet_epsilon:.3f} "
+        f"concurrency={cfg.train.selfplay_concurrency} "
+        f"selfplay_workers={args.selfplay_workers} "
+        f"central_inference={'on' if central_inference else 'off'} "
+        f"max_moves={cfg.train.max_game_moves} "
+        f"lr={cfg.train.learning_rate:.6f} "
+        f"lr_min={cfg.train.lr_min:.6f} "
+        f"lr_warmup_iters={cfg.train.lr_warmup_iters} "
+        f"lr_total_iters={cfg.train.lr_total_iters} "
+        f"tb_max_pieces={cfg.train.tb_max_pieces} "
+        f"syzygy_path={cfg.train.syzygy_path or 'off'} "
+        f"draw_penalty={cfg.train.draw_penalty:.3f} "
+        f"value_target={cfg.train.value_target} "
+        f"value_q_ratio={cfg.train.value_q_ratio:.3f} "
+        f"value_coef={cfg.train.value_coef:.3f} "
+        f"wdl_head={int(cfg.net.wdl_head)} "
+        f"wdl_coef={cfg.train.wdl_coef:.3f} "
+        f"policy_surprise_data_weight={cfg.train.policy_surprise_data_weight:.3f} "
+        f"resign_threshold={cfg.train.resign_threshold:.3f} "
+        f"resign_plies={cfg.train.resign_plies} "
+        f"resign_min_moves={cfg.train.resign_min_moves} "
+        f"move_temperature={cfg.train.move_temperature:.3f} "
+        f"move_temperature_plies={cfg.train.move_temperature_plies} "
+        f"random_opening_plies={cfg.train.random_opening_plies} "
+        f"random_opening_probability={cfg.train.random_opening_probability:.3f} "
+        f"gate_games={args.gate_games} "
+        f"gate_sims={args.gate_sims if args.gate_sims is not None else 'match-selfplay'} "
+        f"gate_exploration_moves={args.gate_exploration_moves} "
+        f"gate_openings={gate_openings_spec}"
+        f"{f'({len(gate_openings)} lines)' if gate_openings else ''} "
+        f"gate_anchor_iter={args.gate_anchor_iter} "
+        f"quick_eval_games={args.quick_eval_games} "
+        f"quick_eval_lag={args.quick_eval_lag}"
+    )
+    step_metrics_path = os.path.join(cfg.train.checkpoint_dir, "metrics_steps.csv")
+    print(f"step metrics: {step_metrics_path}")
     net = ChessNet(cfg.net).to(args.device)
     if state is not None:
         model_state = state["model"] if isinstance(state, dict) and "model" in state else state
         _load_matching_state_dict(net, model_state, label="resume load")
         start_iter = int(state.get("iteration", -1)) + 1
         print(f"resumed from {args.resume} at iteration {start_iter} "
-              f"(net: {cfg.net.blocks}x{cfg.net.filters})")
+              f"(net: {cfg.net.blocks}x{cfg.net.filters} "
+              f"wdl_head={int(cfg.net.wdl_head)})")
     if args.device.startswith("cuda"):
         if hasattr(torch, "compile"):
             net = torch.compile(net, dynamic=True)
@@ -2397,15 +2594,20 @@ def main() -> None:
                         net, optimizer, batch, args.device, scaler=scaler,
                         grad_clip=cfg.train.grad_clip_norm,
                         value_coef=cfg.train.value_coef,
+                        wdl_coef=cfg.train.wdl_coef,
                     )
                     for name, value in step_result.items():
                         step_metrics.setdefault(name, []).append(value)
                     step_rows.append((int(step), step_result))
-                    train_bar.set_postfix(
-                        p=f"{step_result['policy_loss']:.3f}",
-                        v=f"{step_result['value_loss']:.3f}",
-                        g=f"{step_result['grad_norm']:.2f}",
-                    )
+                    postfix = {
+                        "p": f"{step_result['policy_loss']:.3f}",
+                        "v": f"{step_result['value_loss']:.3f}",
+                        "g": f"{step_result['grad_norm']:.2f}",
+                    }
+                    if cfg.net.wdl_head and cfg.train.wdl_coef > 0.0:
+                        postfix["wdl"] = f"{step_result['wdl_loss']:.3f}"
+                        postfix["wdl_acc"] = f"{step_result['wdl_accuracy']:.2f}"
+                    train_bar.set_postfix(**postfix)
             train_dt = time.time() - t_train
             _flush_step_metrics(cfg.train.checkpoint_dir, it, step_rows)
             net.eval()
@@ -2427,6 +2629,9 @@ def main() -> None:
             value_sign_acc = _mean_metric("value_sign_acc")
             policy_top1_agree = _mean_metric("policy_top1_agree")
             grad_norm = _finite_median(step_metrics.get("grad_norm", []))
+            wdl_loss_mean = _mean_metric("wdl_loss")
+            wdl_accuracy_mean = _mean_metric("wdl_accuracy")
+            wdl_labeled_fraction_mean = _mean_metric("wdl_labeled_fraction")
 
             total_games = len(game_lengths)
             white_wins = sum(1 for o in game_outcomes if o == 1)
@@ -2474,13 +2679,22 @@ def main() -> None:
                         print(f"quick eval iter {it}: failed ({exc})", flush=True)
 
             term_summary = ", ".join(f"{k}:{v}" for k, v in sorted(termination_counts.items()))
+            wdl_progress = ""
+            if cfg.net.wdl_head:
+                wdl_progress = (
+                    f" | wdl_coef {cfg.train.wdl_coef:.3f}"
+                    f" | wdl_loss {wdl_loss_mean:.3f}"
+                    f" | wdl_acc {wdl_accuracy_mean:.3f}"
+                    f" | wdl_lbl {wdl_labeled_fraction_mean:.3f}"
+                )
             print(f"iter {it:3d} | sims {sims:3d} | games {cfg.train.games_per_iteration} "
                   f"| samples {new_samples:4d} | buffer {len(buffer):6d} "
                   f"| policy_loss {pl:.3f} | value_loss {vl:.3f} "
                   f"| ent {policy_entropy:.3f} | sign_acc {value_sign_acc:.3f} "
                   f"| lr {current_lr:.3e} "
                   f"| decisive {decisive_rate:.3f} "
-                  f"| ends {term_summary} "
+                  f"| ends {term_summary}"
+                  f"{wdl_progress} "
                   f"| selfplay {selfplay_dt:.1f}s train {train_dt:.1f}s"
                   f"| {dt:.1f}s", flush=True)
 
@@ -2535,6 +2749,10 @@ def main() -> None:
                 gpu_util_pct=gpu_util_pct,
                 buffer_min_iter=buffer_min_iter,
                 buffer_max_iter=buffer_max_iter,
+                wdl_coef=cfg.train.wdl_coef,
+                wdl_loss=wdl_loss_mean,
+                wdl_accuracy=wdl_accuracy_mean,
+                wdl_labeled_fraction=wdl_labeled_fraction_mean,
             )
 
             if args.gate_every > 0 and it > 0 and it % args.gate_every == 0:

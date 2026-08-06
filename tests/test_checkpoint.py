@@ -12,11 +12,14 @@ from engine.analyze import load_evaluator
 from engine.config import Config
 from engine.encoding import ENCODING_VERSION, POLICY_SIZE
 from engine.network import ChessNet
-from engine.selfplay import Sample
+from engine.selfplay import WDL_DRAW, WDL_LOSS, WDL_UNLABELED, WDL_WIN, Sample
 from engine.train import (
     DriveDisconnectedError,
+    _checkpoint_wdl_head,
     _load_sample_shard,
+    _net_cfg_from_module,
     _require_value_target_compat,
+    _require_wdl_upgrade_reset,
     _require_warm_buffer_fill,
     _save_sample_shard,
     _warm_replay_buffer,
@@ -322,6 +325,196 @@ def test_legacy_shard_without_value_target_still_loads(tmp_path) -> None:
     loaded = _load_sample_shard(path, expected_value_target="root_q")
     assert len(loaded) == 1
     assert loaded[0].value == pytest.approx(0.5)
+
+
+def test_wdl_checkpoint_architecture_round_trip(tmp_path) -> None:
+    cfg = Config()
+    cfg.net.blocks = 1
+    cfg.net.filters = 4
+    cfg.net.wdl_head = True
+    cfg.train.wdl_coef = 0.35
+    cfg.train.value_target = "outcome"
+    net = ChessNet(cfg.net)
+    path = str(tmp_path / "wdl.pt")
+    save_checkpoint(net, cfg, path, iteration=4)
+
+    state = torch.load(path, map_location="cpu")
+    assert state["net"]["wdl_head"] is True
+    assert state["wdl_coef"] == pytest.approx(0.35)
+    assert state["encoding_version"] == ENCODING_VERSION == 2
+    restored_cfg = Config()
+    restored_cfg.net = type(cfg.net)(**state["net"])
+    restored = ChessNet(restored_cfg.net)
+    restored.load_state_dict(state["model"])
+    assert restored.wdl_head is True
+    assert any(name.startswith("wdl") for name, _ in restored.named_parameters())
+    assert _net_cfg_from_module(restored).wdl_head is True
+
+
+def test_wdl_checkpoint_stamp_prevents_silent_downgrade(tmp_path) -> None:
+    """Resume applies stamped net cfg even when live defaults keep wdl_head=False."""
+    cfg = Config()
+    cfg.net.blocks = 1
+    cfg.net.filters = 4
+    cfg.net.wdl_head = True
+    cfg.train.value_target = "outcome"
+    net = ChessNet(cfg.net)
+    path = str(tmp_path / "wdl_stamp.pt")
+    save_checkpoint(net, cfg, path, iteration=2)
+
+    state = torch.load(path, map_location="cpu")
+    live = Config()
+    assert live.net.wdl_head is False
+    # Mirrors engine.train resume: stamped architecture wins over missing CLI flag.
+    from engine.config import NetConfig
+
+    ckpt_net = NetConfig(**state["net"])
+    _require_wdl_upgrade_reset(
+        cli_wdl_head=False,
+        checkpoint_wdl_head=bool(ckpt_net.wdl_head),
+        reset_optimizer=False,
+        resuming=True,
+    )
+    live.net = ckpt_net
+    rebuilt = ChessNet(live.net)
+    rebuilt.load_state_dict(state["model"])
+    assert live.net.wdl_head is True
+    assert rebuilt.wdl_head is True
+    assert any(name.startswith("wdl") for name, _ in rebuilt.named_parameters())
+
+
+def test_legacy_checkpoint_upgrade_guard() -> None:
+    with pytest.raises(ValueError, match="--reset-optimizer"):
+        _require_wdl_upgrade_reset(
+            cli_wdl_head=True,
+            checkpoint_wdl_head=False,
+            reset_optimizer=False,
+            resuming=True,
+        )
+
+
+def test_raw_checkpoint_missing_net_stamp_treated_as_legacy_for_wdl_guard() -> None:
+    net, optimizer, _cfg = _tiny_net_and_optimizer()
+    state = {"model": net.state_dict(), "optimizer": optimizer.state_dict(), "iteration": 3}
+    assert _checkpoint_wdl_head(state) is False
+    with pytest.raises(ValueError, match="--reset-optimizer"):
+        _require_wdl_upgrade_reset(
+            cli_wdl_head=True,
+            checkpoint_wdl_head=_checkpoint_wdl_head(state),
+            reset_optimizer=False,
+            resuming=True,
+        )
+
+
+def test_sample_shard_wdl_round_trip(tmp_path) -> None:
+    ckpt_dir = str(tmp_path)
+    samples = [
+        Sample(
+            planes=np.zeros((20, 8, 8), dtype=np.float32),
+            policy=np.zeros(POLICY_SIZE, dtype=np.float32),
+            player=True,
+            value=0.25,
+            wdl=WDL_WIN,
+        ),
+        Sample(
+            planes=np.ones((20, 8, 8), dtype=np.float32),
+            policy=np.zeros(POLICY_SIZE, dtype=np.float32),
+            player=False,
+            value=-0.5,
+            wdl=WDL_LOSS,
+        ),
+        Sample(
+            planes=np.full((20, 8, 8), 0.5, dtype=np.float32),
+            policy=np.zeros(POLICY_SIZE, dtype=np.float32),
+            player=True,
+            value=0.0,
+            wdl=WDL_DRAW,
+        ),
+    ]
+    _save_sample_shard(ckpt_dir, 9, samples, value_target="outcome")
+    path = tmp_path / "samples_iter_0009.npz"
+    with np.load(path) as data:
+        assert "wdl" in data
+        assert str(np.asarray(data["wdl_schema"]).reshape(-1)[0]) == "stm_wdl_v1"
+        assert data["wdl"].dtype == np.int8
+        assert int(np.asarray(data["encoding_version"]).reshape(-1)[0]) == ENCODING_VERSION == 2
+    loaded = _load_sample_shard(str(path), expected_value_target="outcome")
+    assert [s.wdl for s in loaded] == [WDL_WIN, WDL_LOSS, WDL_DRAW]
+
+
+def test_legacy_shard_missing_wdl_loads_unlabeled(tmp_path) -> None:
+    path = str(tmp_path / "samples_iter_0005.npz")
+    sample = _fake_sample()
+    np.savez_compressed(
+        path,
+        planes=np.stack([sample.planes]).astype(np.float16),
+        policies=np.stack([sample.policy]).astype(np.float16),
+        players=np.array([True], dtype=np.bool_),
+        values=np.array([0.5], dtype=np.float32),
+        source_iters=np.array([5], dtype=np.int32),
+        encoding_version=np.array([ENCODING_VERSION], dtype=np.int16),
+        value_target=np.array(["root_q"], dtype=np.str_),
+    )
+    loaded = _load_sample_shard(path, expected_value_target="root_q")
+    assert len(loaded) == 1
+    assert loaded[0].wdl == WDL_UNLABELED
+
+
+def test_unlabeled_only_shard_omits_wdl_key(tmp_path) -> None:
+    sample = _fake_sample()
+    sample.wdl = WDL_UNLABELED
+    _save_sample_shard(str(tmp_path), 6, [sample], value_target="root_q")
+    path = tmp_path / "samples_iter_0006.npz"
+    with np.load(path) as data:
+        assert "wdl" not in data
+        assert "wdl_schema" not in data
+    loaded = _load_sample_shard(str(path), expected_value_target="root_q")
+    assert loaded[0].wdl == WDL_UNLABELED
+
+
+def test_load_sample_shard_skips_wdl_schema_mismatch(
+    tmp_path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = str(tmp_path / "samples_iter_0011.npz")
+    sample = _fake_sample()
+    np.savez_compressed(
+        path,
+        planes=np.stack([sample.planes]).astype(np.float16),
+        policies=np.stack([sample.policy]).astype(np.float16),
+        players=np.array([True], dtype=np.bool_),
+        values=np.array([0.5], dtype=np.float32),
+        source_iters=np.array([11], dtype=np.int32),
+        encoding_version=np.array([ENCODING_VERSION], dtype=np.int16),
+        value_target=np.array(["root_q"], dtype=np.str_),
+        wdl=np.array([WDL_WIN], dtype=np.int8),
+        wdl_schema=np.array(["other_wdl_v0"], dtype=np.str_),
+    )
+    loaded = _load_sample_shard(path, expected_value_target="root_q")
+    assert loaded == []
+    captured = capsys.readouterr().out
+    assert "wdl_schema=other_wdl_v0" in captured
+    assert "stm_wdl_v1" in captured
+
+
+def test_load_sample_shard_skips_wdl_without_schema(
+    tmp_path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = str(tmp_path / "samples_iter_0012.npz")
+    sample = _fake_sample()
+    np.savez_compressed(
+        path,
+        planes=np.stack([sample.planes]).astype(np.float16),
+        policies=np.stack([sample.policy]).astype(np.float16),
+        players=np.array([True], dtype=np.bool_),
+        values=np.array([0.5], dtype=np.float32),
+        source_iters=np.array([12], dtype=np.int32),
+        encoding_version=np.array([ENCODING_VERSION], dtype=np.int16),
+        value_target=np.array(["root_q"], dtype=np.str_),
+        wdl=np.array([WDL_WIN], dtype=np.int8),
+    )
+    loaded = _load_sample_shard(path, expected_value_target="root_q")
+    assert loaded == []
+    assert "wdl_schema=missing" in capsys.readouterr().out
 
 
 def test_legacy_shard_singular_keys_match_plural_keys(tmp_path) -> None:
