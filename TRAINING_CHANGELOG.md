@@ -44,8 +44,10 @@ Gates run every 20 iters vs the checkpoint **20 iters ago**. Edit only the `TRAI
 | **541** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | rewind tip **540**; restore buffer **200k** / `random_opening_plies=0`; one TRAIN knob: **LR / lr_min 7.5e-5→5e-5**; next gate **560 vs 540** |
 | **561**¶¶ | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | `dirichlet_alpha` **0.30→0.15** (ε held 0.25) — **discarded** (diversity CRITICAL: H≈1.64 / c2c4≈0.59 / 20/20 top1; gate **580 vs 560** +12 Elo INC; metrics 561–580 cleared) |
 | **561** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | resume tip **560**; restore `dirichlet_alpha` **0.30** (**hygiene**, not a new knob); HOLD LR **5e-5** / sims **200** / buffer **200k**; washout canary then recovery block; next gate **580 vs 560** |
+| **621** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | AZ-native mixture: `random_opening_plies=1` @ probability **0.30** (no human book); hold sims **200** / LR / buffer |
+| **661** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | resume tip **660**; **one TRAIN knob:** self-play **sims 200→250** (gate stays 100); keep mixture 1@0.30; next gates **680 vs 660** / lag **680 vs 640** |
 
-**Current row:** resume tip **560** (`latest.pt` / `ckpt_iter_0560.pt`), `value_target=root_q`, **`sims=200`**, games/steps **160/800**, **`c_puct=1.25`**, buffer/window **200k**, **LR 5e-5 flat**, **`dirichlet_alpha=0.30`** (restore after discarded alpha=0.15 tip), **`dirichlet_epsilon=0.25`**, **`move_temperature=4`** for 10 plies, **`random_opening_plies=0`**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. **No new TRAIN knob** — alpha restore is discard hygiene. Canary through 565 (abort if mean c2c4 ≥ 0.60 / H ≤ 1.70 sustained); manual gate after the block: **580 vs 560**.
+**Current row:** resume tip **660** (`latest.pt` / `ckpt_iter_0660.pt`), `value_target=root_q`, **`sims=250`**, games/steps **160/800**, **`c_puct=1.25`**, buffer/window **200k**, **LR 5e-5 flat**, **`dirichlet_alpha=0.30`**, **`dirichlet_epsilon=0.25`**, **`move_temperature=4`** for 10 plies, **`random_opening_plies=1`** @ probability **0.30**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Manual gates after the block: **680 vs 660**; if INC, lag **680 vs 640**.
 
 Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net only with a new `--checkpoint-dir`.
 
@@ -254,7 +256,7 @@ Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net o
 - Gate **580 vs 560**: INCONCLUSIVE (+12 Elo). Diversity CRITICAL (block H≈1.64 / c2c4≈0.59 / top1=c2c4 20/20).
 - Discarded; rewind tip **560**; restore α **0.30**. Metrics rows 561–580 cleared.
 
-### Iter 561 — alpha restore washout / recovery (current)
+### Iter 561 — alpha restore washout / recovery
 
 - Restore **`ckpt_iter_0560.pt`** as `latest.pt`.
 - Hold games 160 / sims 200 / steps 800 / buffer **200k** / LR **5e-5** / `c_puct=1.25` / T=4 / plies=10 / ε=0.25 / `random_opening_plies=0` / `root_q`.
@@ -262,4 +264,17 @@ Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net o
 - **No new TRAIN knob.** Canary through 565; if green, full recovery block to 580.
 - Manual gate after the block: **580 vs 560**; if INC, champ context **580 vs 540** and optional lag **580 vs 520**.
 
-Last updated: 2026-07-31.
+### Iter 621 — AZ-native random-opening mixture
+
+- Resume from tip **620**. Hold sims **200** / LR **5e-5** / buffer **200k** / α=0.30 / ε=0.25 / T=4.
+- **One TRAIN knob:** `random_opening_plies=1` with probability **0.30** (uniform legal first ply; no human opening book).
+- Diversity level-shift observed; mixture kept through tip **660**.
+
+### Iter 661 — sims 250 (current)
+
+- Resume tip **660** (`latest.pt` / `ckpt_iter_0660.pt`).
+- Hold games 160 / steps 800 / buffer **200k** / LR **5e-5** / `c_puct=1.25` / T=4 / plies=10 / ε=0.25 / mixture 1@0.30 / `root_q`.
+- **One TRAIN knob:** self-play **`sims` 200→250** (gate stays **100**).
+- Manual gates after the block: **680 vs 660**; if INC, lag **680 vs 640**.
+
+Last updated: 2026-08-07.
