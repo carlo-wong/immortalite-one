@@ -34,7 +34,7 @@ from studio_sleep import SLEEP_STUDIO, maybe_stop_studio
 STOP_INTERVAL = 20  # stop after completing iters 160, 180, 200, …
 
 TRAIN = {
-    "sims": 250,  # self-play; gate stays 100
+    "sims": 200,  # self-play; gate stays 100
     "c_puct": 1.25,  # post-500 search retune; gates keep Config default 1.5
     # Discard hygiene: restore baseline alpha after failed 0.15 tip (561-580).
     "dirichlet_alpha": 0.30,
@@ -68,7 +68,7 @@ TRAIN = {
     "lr_total_iters": 10_000,
     "lr_warmup_iters": 0,
     "grad_clip": 10.0,
-    # Tip 660→680: one knob sims 200→250; hold LR/buffer/other knobs.
+    # Rewind tip 660: restore sims 200 after failed 250 canary (661–680 discarded).
     "move_temperature": 4.0,
     "move_temperature_plies": 10,
     # Match live Colab mixture (spent AZ-native; not a new knob this block).

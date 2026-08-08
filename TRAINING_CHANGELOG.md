@@ -45,9 +45,10 @@ Gates run every 20 iters vs the checkpoint **20 iters ago**. Edit only the `TRAI
 | **561**¶¶ | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | `dirichlet_alpha` **0.30→0.15** (ε held 0.25) — **discarded** (diversity CRITICAL: H≈1.64 / c2c4≈0.59 / 20/20 top1; gate **580 vs 560** +12 Elo INC; metrics 561–580 cleared) |
 | **561** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | resume tip **560**; restore `dirichlet_alpha` **0.30** (**hygiene**, not a new knob); HOLD LR **5e-5** / sims **200** / buffer **200k**; washout canary then recovery block; next gate **580 vs 560** |
 | **621** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | AZ-native mixture: `random_opening_plies=1` @ probability **0.30** (no human book); hold sims **200** / LR / buffer |
-| **661** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | resume tip **660**; **one TRAIN knob:** self-play **sims 200→250** (gate stays 100); keep mixture 1@0.30; next gates **680 vs 660** / lag **680 vs 640** |
+| **661**¶ | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | sims **200→250** — **discarded** (soft-dud: 680vs660 −15 Elo INC + lag 680vs640 INC; metrics **661–680** cleared) |
+| **661** | **160** | **800** | **160** | **2**/4 | **200k** | **256 games** (Elo CI), **gate_sims=100** | **5e-5 flat** | rewind tip **660**; restore **sims=200**; keep mixture 1@0.30 / LR / buffer; next gates **680 vs 660** / lag **680 vs 640** |
 
-**Current row:** resume tip **660** (`latest.pt` / `ckpt_iter_0660.pt`), `value_target=root_q`, **`sims=250`**, games/steps **160/800**, **`c_puct=1.25`**, buffer/window **200k**, **LR 5e-5 flat**, **`dirichlet_alpha=0.30`**, **`dirichlet_epsilon=0.25`**, **`move_temperature=4`** for 10 plies, **`random_opening_plies=1`** @ probability **0.30**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Manual gates after the block: **680 vs 660**; if INC, lag **680 vs 640**.
+**Current row:** resume tip **660** (`latest.pt` / `ckpt_iter_0660.pt`), `value_target=root_q`, **`sims=200`**, games/steps **160/800**, **`c_puct=1.25`**, buffer/window **200k**, **LR 5e-5 flat**, **`dirichlet_alpha=0.30`**, **`dirichlet_epsilon=0.25`**, **`move_temperature=4`** for 10 plies, **`random_opening_plies=1`** @ probability **0.30**, **`value_coef=1.0`**, **`policy_surprise_data_weight=0`**. Do **not** use `--reset-optimizer`. Manual gates after the block: **680 vs 660**; if INC, lag **680 vs 640**.
 
 Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net only with a new `--checkpoint-dir`.
 
@@ -270,11 +271,16 @@ Resume keeps **checkpoint net architecture** (8×96, 51 value bins). Fresh net o
 - **One TRAIN knob:** `random_opening_plies=1` with probability **0.30** (uniform legal first ply; no human opening book).
 - Diversity level-shift observed; mixture kept through tip **660**.
 
-### Iter 661 — sims 250 (current)
+### Iter 661¶ — sims 250 (discarded)
+
+- Resume tip **660**; raised self-play **`sims` 200→250** (gate stayed **100**).
+- Gate **680 vs 660** soft-dud: adjacent **−14.9 Elo INC**, lag **680 vs 640 INC** (lost prior lag-PASS pattern).
+- **Discarded:** metrics rows **661–680** cleared; tip restored to **660**.
+
+### Iter 661 — rewind sims 200 (current)
 
 - Resume tip **660** (`latest.pt` / `ckpt_iter_0660.pt`).
-- Hold games 160 / steps 800 / buffer **200k** / LR **5e-5** / `c_puct=1.25` / T=4 / plies=10 / ε=0.25 / mixture 1@0.30 / `root_q`.
-- **One TRAIN knob:** self-play **`sims` 200→250** (gate stays **100**).
+- Restore self-play **`sims=200`** (gate stays **100**). Hold games 160 / steps 800 / buffer **200k** / LR **5e-5** / `c_puct=1.25` / T=4 / plies=10 / ε=0.25 / mixture 1@0.30 / `root_q`.
 - Manual gates after the block: **680 vs 660**; if INC, lag **680 vs 640**.
 
-Last updated: 2026-08-07.
+Last updated: 2026-08-08.
